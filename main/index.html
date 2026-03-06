@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="description" content="Tesla IPTV Player - Professional Xtream Codes Streaming Solution" />
+  <title>Tesla IPTV Player</title>
+  <link rel="stylesheet" href="styles/main.css" />
+  <link rel="stylesheet" href="styles/player.css" />
+  <link rel="stylesheet" href="styles/responsive.css" />
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+</head>
+<body>
+
+<!-- Loading Spinner -->
+<div id="loading-spinner" class="loading-spinner">
+  <div class="spinner"></div>
+  <p>Yükleniyor...</p>
+</div>
+
+<!-- Auth Screen -->
+<div id="auth-module" class="auth-container">
+  <div class="auth-box">
+    <div class="auth-header">
+      <div class="auth-logo">
+        <svg width="32" height="32" viewBox="0 0 24 24" fill="white">
+          <path d="M21 3H3c-1.11 0-2 .89-2 2v12c0 1.11.89 2 2 2h5v2H6v2h12v-2h-2v-2h5c1.11 0 2-.89 2-2V5c0-1.11-.89-2-2-2zm0 14H3V5h18v12zm-5-6-7 4V7z"/>
+        </svg>
+      </div>
+      <h1>Tesla <span>IPTV</span></h1>
+      <p class="subtitle">Professional Streaming Solution</p>
+    </div>
+    <form id="login-form" class="login-form" autocomplete="on">
+      <div class="form-group">
+        <label for="server-url">Server URL</label>
+        <input id="server-url" type="url" placeholder="http://server.example.com:8080" required autocomplete="url" />
+        <small>Xtream Codes sunucu adresinizi girin</small>
+      </div>
+      <div class="form-group">
+        <label for="username">Kullanıcı Adı</label>
+        <input id="username" type="text" placeholder="Kullanıcı adı" required autocomplete="username" />
+      </div>
+      <div class="form-group">
+        <label for="password">Şifre</label>
+        <input id="password" type="password" placeholder="Şifre" required autocomplete="current-password" />
+      </div>
+      <div class="form-group">
+        <label class="checkbox-group">
+          <input id="remember-login" type="checkbox" />
+          <span>Beni Hatırla</span>
+        </label>
+      </div>
+      <button type="submit" class="btn btn-primary btn-large" id="login-btn">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/>
+        </svg>
+        Giriş Yap
+      </button>
+      <div id="login-error" class="error-message"></div>
+      <div id="login-debug" style="display:none;"></div>
+    </form>
+    <div class="auth-footer"><p>© 2025 Tesla IPTV · Tüm hakları saklıdır.</p></div>
+  </div>
+</div>
+
+<!-- Main App -->
+<div id="app" class="app-container" style="display:none;">
+
+  <header class="app-header">
+    <div class="header-left">
+      <button id="menu-toggle" class="menu-toggle" aria-label="Menü">
+        <span></span><span></span><span></span>
+      </button>
+      <h1 class="app-title">Tesla <span>IPTV</span></h1>
+    </div>
+    <div class="header-center">
+      <div class="search-container">
+        <input id="search-input" type="search" class="search-input" placeholder="Kanal, film, dizi ara..." autocomplete="off" />
+        <button id="search-btn" class="search-btn" title="Ara">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+        </button>
+      </div>
+    </div>
+    <div class="header-right">
+      <button id="settings-btn" class="icon-btn" title="Ayarlar">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>
+        </svg>
+      </button>
+      <button id="profile-btn" class="icon-btn" title="Profil">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>
+        </svg>
+      </button>
+      <button id="logout-btn" class="icon-btn" title="Çıkış">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>
+        </svg>
+      </button>
+    </div>
+  </header>
+
+  <div class="app-body">
+    <div id="sidebar-overlay" class="sidebar-overlay"></div>
+    <aside id="sidebar" class="sidebar">
+      <nav class="nav-menu">
+        <button class="nav-item active" data-view="live">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M21 3H3c-1.11 0-2 .89-2 2v12c0 1.11.89 2 2 2h18c1.11 0 2-.89 2-2V5c0-1.11-.89-2-2-2zm0 14H3V5h18v12zm-5-6-7 4V7z"/></svg>
+          <span>Canlı TV</span>
+        </button>
+        <button class="nav-item" data-view="movies">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M18 4l2 4h-3l-2-4h-2l2 4h-3l-2-4H8l2 4H7L5 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V4h-4z"/></svg>
+          <span>Filmler</span>
+        </button>
+        <button class="nav-item" data-view="series">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M4 6H2v14c0 1.1.9 2 2 2h14v-2H4V6zm16-4H8c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-8 12.5v-9l6 4.5-6 4.5z"/></svg>
+          <span>Diziler</span>
+        </button>
+        <button class="nav-item" data-view="favorites">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>
+          <span>Favoriler</span>
+        </button>
+        <button class="nav-item" data-view="history">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+          <span>Geçmiş</span>
+        </button>
+      </nav>
+    </aside>
+
+    <main class="main-content">
+      <section id="live-view" class="view-section active">
+        <div class="categories-section"><div class="categories-scroll" id="live-categories"></div></div>
+        <div class="grid-wrapper"><div id="live-grid" class="content-grid"></div></div>
+      </section>
+      <section id="movies-view" class="view-section">
+        <div class="categories-section"><div class="categories-scroll" id="movies-categories"></div></div>
+        <div class="grid-wrapper"><div id="movies-grid" class="content-grid"></div></div>
+      </section>
+      <section id="series-view" class="view-section">
+        <div class="categories-section"><div class="categories-scroll" id="series-categories"></div></div>
+        <div class="grid-wrapper"><div id="series-grid" class="content-grid"></div></div>
+      </section>
+      <section id="favorites-view" class="view-section">
+        <div class="grid-wrapper"><div id="favorites-grid" class="content-grid"></div></div>
+      </section>
+      <section id="history-view" class="view-section">
+        <div id="history-list" class="history-list"></div>
+      </section>
+    </main>
+  </div>
+
+  <!-- ═══ PLAYER ═══════════════════════════════════════════════ -->
+  <div id="player-modal" class="player-modal" style="display:none;">
+    <div class="player-container">
+
+      <div class="player-header">
+        <h2 id="player-title"></h2>
+        <button id="player-close" class="control-btn" title="Kapat (Esc)">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+
+      <div class="video-player-wrapper">
+        <video id="video-player" class="video-player" playsinline></video>
+
+        <div id="player-buffering" class="player-buffering" style="display:none;">
+          <div class="spinner"></div>
+        </div>
+
+        <div id="player-controls" class="player-controls">
+          <div class="progress-bar-container" id="progress-bar-container">
+            <div id="progress-bar" class="progress-bar">
+              <div id="progress-fill" class="progress-fill"></div>
+              <div id="progress-handle" class="progress-handle" style="left:0%"></div>
+            </div>
+          </div>
+
+          <div class="controls-bottom">
+            <div class="controls-left">
+              <button id="play-pause-btn" class="control-btn" title="Oynat/Duraklat (Space)">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+              </button>
+              <button id="volume-btn" class="control-btn" title="Ses (M)">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+                  <path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>
+                </svg>
+              </button>
+              <div id="volume-slider" class="volume-slider">
+                <input id="volume-control" type="range" min="0" max="100" value="70" />
+              </div>
+              <span id="current-time" class="time">--:--</span>
+              <span class="time-separator">/</span>
+              <span id="duration-time" class="time">--:--</span>
+            </div>
+
+            <div class="controls-right">
+              <!-- Subtitle selector -->
+              <div class="subtitle-wrapper">
+                <button id="subtitle-btn" class="control-btn sub-btn" title="Altyazı (C)" style="display:none;">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="2" y="4" width="20" height="16" rx="2"/>
+                    <path d="M7 15h4m4 0h2M7 11h2m4 0h6"/>
+                  </svg>
+                </button>
+                <div id="subtitle-panel" class="subtitle-panel" style="display:none;"></div>
+              </div>
+
+              <select id="quality-select" class="quality-select"><option value="">Auto</option></select>
+
+              <button id="pip-btn" class="control-btn" title="Mini Ekran">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <rect x="2" y="2" width="20" height="20" rx="2"/><rect x="13" y="13" width="8" height="8" rx="1"/>
+                </svg>
+              </button>
+              <button id="fullscreen-btn" class="control-btn" title="Tam Ekran (F)">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>
+                </svg>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div class="player-info">
+          <div id="player-description"></div>
+          <div class="player-meta">
+            <button id="favorite-toggle" class="meta-btn">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>
+              </svg>
+              <span>Favori</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ SERIES DETAIL MODAL ══════════════════════════════════ -->
+  <div id="series-modal" class="modal series-modal-overlay" style="display:none;">
+    <div class="series-modal-content">
+      <button class="close-btn series-close-x" onclick="document.getElementById('series-modal').style.display='none'">×</button>
+
+      <div class="series-hero" id="series-hero-bg">
+        <div class="series-hero-gradient"></div>
+        <div class="series-hero-inner">
+          <img id="series-cover-img" src="" alt="" class="series-cover" />
+          <div class="series-hero-text">
+            <h2 id="series-modal-title"></h2>
+            <div class="series-badges-row">
+              <span id="series-rating" class="series-badge"></span>
+              <span id="series-genre" class="series-badge"></span>
+            </div>
+            <p id="series-plot" class="series-plot"></p>
+            <p id="series-cast" class="series-cast"></p>
+          </div>
+        </div>
+      </div>
+
+      <div class="series-body">
+        <div class="season-tabs-bar" id="season-tabs"></div>
+        <div class="episode-grid" id="episode-grid"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ SETTINGS MODAL ═══════════════════════════════════════ -->
+  <div id="settings-modal" class="modal" style="display:none;">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2>Ayarlar</h2>
+        <button class="close-btn" data-close="settings-modal">×</button>
+      </div>
+      <div class="settings-tabs">
+        <button class="settings-tab active" data-tab="playback">Oynatma</button>
+        <button class="settings-tab" data-tab="about">Hakkında</button>
+      </div>
+      <div class="settings-content">
+        <div class="settings-panel active" id="playback-settings">
+          <div class="setting-group">
+            <label>Varsayılan Ses Seviyesi</label>
+            <input type="range" id="default-volume" min="0" max="100" value="70" />
+          </div>
+          <div class="setting-group">
+            <label class="checkbox"><input type="checkbox" id="resume-playback" checked /><span>Son konumdan devam et</span></label>
+          </div>
+          <button class="btn btn-danger mt-2" id="clear-cache-btn">Önbelleği Temizle</button>
+        </div>
+        <div class="settings-panel" id="about-settings">
+          <div class="about-info">
+            <p><strong>Tesla IPTV Player v2.0</strong></p>
+            <p>Professional Xtream Codes IPTV Streaming Solution</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ PROFILE MODAL ════════════════════════════════════════ -->
+  <div id="profile-modal" class="modal" style="display:none;">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2>Kullanıcı Profili</h2>
+        <button class="close-btn" data-close="profile-modal">×</button>
+      </div>
+      <div class="profile-content">
+        <div class="profile-avatar">👤</div>
+        <div class="profile-info">
+          <p><strong id="profile-username"></strong></p>
+          <p id="profile-expiration"></p>
+          <p id="profile-bandwidth"></p>
+          <p id="profile-connections"></p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="app-toast" class="toast"></div>
+
+</div><!-- #app -->
+
+<script src="js/config.js"></script>
+<script src="js/services/storage-service.js"></script>
+<script src="js/services/api-service.js"></script>
+<script src="js/services/cache-service.js"></script>
+<script src="js/modules/ui-module.js"></script>
+<script src="js/modules/auth-module.js"></script>
+<script src="js/modules/player-module.js"></script>
+<script src="js/modules/content-module.js"></script>
+<script src="js/modules/epg-module.js"></script>
+<script src="js/modules/settings-module.js"></script>
+<script src="js/app.js"></script>
+<script src="js/startup-helper.js"></script>
+</body>
+</html>

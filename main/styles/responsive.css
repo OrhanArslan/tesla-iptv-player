@@ -1,0 +1,120 @@
+/* ==================== Responsive ==================== */
+
+/* Large screens */
+@media (min-width: 1440px) {
+  .content-grid {
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  }
+}
+
+/* Medium-large screens */
+@media (max-width: 1200px) {
+  .content-grid {
+    grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
+  }
+}
+
+/* Tablet landscape */
+@media (max-width: 1024px) {
+  :root { --sidebar-w: 190px; }
+  
+  .content-grid {
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 12px;
+  }
+}
+
+/* Tablet portrait */
+@media (max-width: 768px) {
+  :root { --sidebar-w: 200px; }
+
+  .sidebar {
+    position: fixed;
+    left: 0; top: var(--header-h);
+    height: calc(100vh - var(--header-h));
+    z-index: 200;
+    transform: translateX(-100%);
+    transition: transform 0.3s cubic-bezier(0.4,0,0.2,1);
+    box-shadow: 4px 0 40px rgba(0,0,0,0.5);
+  }
+
+  .sidebar.open {
+    transform: translateX(0);
+  }
+
+  .sidebar-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.6);
+    z-index: 199;
+    backdrop-filter: blur(2px);
+    -webkit-backdrop-filter: blur(2px);
+  }
+
+  .sidebar-overlay.show { display: block; }
+
+  .main-content { width: 100%; }
+
+  .content-grid {
+    grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+    gap: 10px;
+  }
+
+  .header-center { max-width: 240px; }
+
+  .app-title { font-size: 16px; }
+
+  /* Player responsive */
+  .player-header h2 { font-size: 15px; }
+  .player-controls { padding: 0 14px 16px; }
+  .player-header { padding: 14px 16px; }
+}
+
+/* Mobile */
+@media (max-width: 480px) {
+  .app-header { padding: 0 14px; }
+
+  .header-center { display: none; }
+
+  .content-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 8px;
+    padding: 12px;
+  }
+
+  .grid-wrapper { padding: 0; }
+
+  .categories-section { padding: 10px 12px 0; }
+
+  .category-btn {
+    font-size: 11.5px;
+    padding: 5px 12px;
+    height: 30px;
+  }
+
+  .history-item-thumbnail { width: 72px; height: 44px; }
+
+  /* Auth responsive */
+  .auth-box { padding: 24px 20px; margin: 16px; }
+
+  /* Player mobile */
+  .controls-left { gap: 0; }
+  .controls-right { gap: 0; }
+
+  .quality-select { display: none; }
+}
+
+/* Very small phones */
+@media (max-width: 360px) {
+  .content-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 6px;
+  }
+}
+
+/* Landscape mobile */
+@media (max-height: 480px) and (orientation: landscape) {
+  .player-header { padding: 10px 16px; }
+  .player-controls { padding: 0 16px 10px; }
+}

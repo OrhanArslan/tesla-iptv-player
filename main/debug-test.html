@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Debug Panel Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; padding: 20px; }
+        .debug-info {
+            margin-top: 15px;
+            padding: 12px;
+            background: #333;
+            border: 2px solid #ff9800;
+            border-radius: 6px;
+            color: #ff9800;
+            font-size: 12px;
+            font-family: monospace;
+            max-height: 200px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+    </style>
+</head>
+<body>
+    <h1>Debug Panel Test</h1>
+    <p>This is a simple test to verify the debug panel is working.</p>
+    <noscript style="color:#900; font-weight:bold;">⚠️ JavaScript is required for this page. Please enable it or view over HTTP.</noscript>
+
+    <div id="login-debug" class="debug-info" style="display:block;"></div>
+    <div id="load-error" style="display:none; color:#900; margin-top:20px;">
+      ⚠️ The debug panel test may need a web server. If this stays empty after a few seconds, try running a local HTTP server.
+    </div>
+
+    <script>
+        // Simulate the debug functionality
+        function showDebug(info) {
+            console.log('DEBUG:', info);
+            const debugDiv = document.getElementById('login-debug');
+            if (debugDiv) {
+                debugDiv.style.display = 'block';
+                debugDiv.textContent += info + '\n';
+                debugDiv.scrollTop = debugDiv.scrollHeight;
+            }
+        }
+
+        function clearDebug() {
+            console.log('DEBUG: Clearing debug panel');
+            const debugDiv = document.getElementById('login-debug');
+            if (debugDiv) {
+                debugDiv.textContent = '';
+                debugDiv.style.display = 'block';
+                debugDiv.textContent = '🔧 DEBUG PANEL ACTIVE - ' + new Date().toLocaleTimeString() + '\n\n';
+            }
+        }
+
+        // Test the debug panel
+        clearDebug();
+        setTimeout(() => {
+            showDebug('🔧 DEBUG PANEL TEST - If you see this, debug is working!');
+            showDebug('🔄 STARTING LOGIN PROCESS...');
+            showDebug('Server URL: test.xtream-codes.com');
+            showDebug('Username: testuser');
+            showDebug('Password: tes***');
+            showDebug('🔍 Testing URL format 1: test.xtream-codes.com');
+            showDebug('❌ Failed: CORS blocked - security policy');
+            showDebug('🔍 Testing URL format 2: http://test.xtream-codes.com');
+            showDebug('❌ Failed: Cannot connect to server');
+            showDebug('❌ FINAL ERROR: CORS BLOCKED');
+            showDebug('REASON: CORS security policy');
+        }, 1000);
+
+        // If after 2 seconds the debug panel is still empty, show load-error hint
+        setTimeout(() => {
+            const debugDiv = document.getElementById('login-debug');
+            if (debugDiv && debugDiv.textContent.trim() === '') {
+                const hint = document.getElementById('load-error');
+                if (hint) hint.style.display = 'block';
+            }
+        }, 2000);
+    </script>
+</body>
+</html>
