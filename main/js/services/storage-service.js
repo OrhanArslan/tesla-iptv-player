@@ -82,7 +82,7 @@ class StorageService {
         return defaultValue;
       }
 
-      return data.value || defaultValue;
+      return data.value !== undefined ? data.value : defaultValue;
     } catch (e) {
       console.error('Storage read error:', e);
       return defaultValue;
@@ -295,6 +295,14 @@ class StorageService {
   getPlaybackState(streamId) {
     const key = `playback_${streamId}`;
     return this.get(key, null);
+  }
+
+  /**
+   * Remove playback state
+   */
+  removePlaybackState(streamId) {
+    const key = `playback_${streamId}`;
+    return this.remove(key);
   }
 
   /**

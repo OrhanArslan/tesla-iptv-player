@@ -179,6 +179,8 @@ class ContentModule {
     card.addEventListener('click', () => {
       if (type === 'series') {
         this.showSeriesDetail({ id, series_id: id, name, icon, stream });
+      } else if (type === 'movies' || type === 'movie' || type === 'vod') {
+        this.showVodDetail({ id, stream_id: id, name, icon, type, ...stream });
       } else {
         playerModule.playStream({ id, stream_id: id, name, icon, type, ...stream });
       }
@@ -203,7 +205,162 @@ class ContentModule {
 
   /* ── SERIES DETAIL ─────────────────────────────────────── */
 
-  async showSeriesDetail(series) {
+  
+  /* ── VOD DETAIL ────────────────────────────────────────── */
+  async showVodDetail(movie) {
+    const modal = document.getElementById('vod-modal');
+    if (!modal) return playerModule.playStream(movie);
+
+    modal.style.display = 'flex';
+    document.getElementById('vod-modal-title').textContent = movie.name;
+    document.getElementById('vod-cover-img').src = movie.icon || '';
+    document.getElementById('vod-plot').textContent = 'Yükleniyor...';
+    document.getElementById('vod-genre').textContent = '';
+    const gallery = document.getElementById('vod-cast-gallery');
+    if (gallery) gallery.innerHTML = '<span style="color:#aaa;font-size:0.9rem;">Kadrolar yükleniyor...</span>';
+    document.getElementById('vod-director').textContent = '';
+    
+    // Reset badges
+    ['vod-year', 'vod-duration', 'vod-rating'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) {
+        el.textContent = '';
+        el.style.display = 'none';
+      }
+    });
+    
+    document.getElementById('vod-hero-bg').style.backgroundImage = movie.icon ? `url(${movie.icon})` : '';
+
+    const playBtn = document.getElementById('vod-play-btn');
+    if (playBtn) {
+      const newPlayBtn = playBtn.cloneNode(true);
+      playBtn.parentNode.replaceChild(newPlayBtn, playBtn);
+      newPlayBtn.addEventListener('click', () => {
+        modal.style.display = 'none';
+        playerModule.playStream(movie);
+      });
+    }
+
+    const favBtn = document.getElementById('vod-fav-btn');
+    if (favBtn) {
+      const newFavBtn = favBtn.cloneNode(true);
+      favBtn.parentNode.replaceChild(newFavBtn, favBtn);
+      const isFav = storageService.getFavorites().some(f => String(f.id) === String(movie.id));
+      newFavBtn.classList.toggle('active', isFav);
+      
+      newFavBtn.addEventListener('click', () => {
+        const checkIsFav = storageService.getFavorites().some(f => String(f.id) === String(movie.id));
+        if (checkIsFav) {
+          storageService.removeFavorite(movie.id);
+          UIModule.showToast('Favorilerden çıkarıldı', 'info');
+        } else {
+          storageService.addFavorite({ id: movie.id, name: movie.name, type: movie.type || 'movie', icon: movie.icon || '' });
+          UIModule.showToast('Favorilere eklendi', 'success');
+        }
+        const nowFav = !checkIsFav;
+        newFavBtn.classList.toggle('active', nowFav);
+        if (this.currentView === 'favorites') this.renderFavorites();
+      });
+    }
+    
+    const vlcBtn = document.getElementById('vod-vlc-btn');
+    if (vlcBtn) {
+      const newVlcBtn = vlcBtn.cloneNode(true);
+      vlcBtn.parentNode.replaceChild(newVlcBtn, vlcBtn);
+      newVlcBtn.addEventListener('click', () => {
+        const streamUrl = apiService.getVodStreamUrl(movie.stream_id || movie.id, movie.container_extension || 'mkv');
+        window.location.href = 'vlc://' + streamUrl;
+      });
+    }
+
+    try {
+      const info = await apiService.getVodInfo(movie.stream_id || movie.id);
+      if (info && info.info) {
+        const mi = info.info;
+        document.getElementById('vod-plot').textContent = mi.plot || movie.description || 'Detay bulunamadı.';
+        document.getElementById('vod-genre').textContent = mi.genre || '';
+        document.getElementById('vod-director').textContent = mi.director ? `Yönetmen: ${mi.director}` : '';
+
+        // Populate badges
+        const year = mi.releasedate ? mi.releasedate.substring(0, 4) : '';
+        const duration = mi.duration || '';
+        const rating = mi.rating ? `⭐ ${mi.rating}` : '';
+
+        if (year) { 
+          const el = document.getElementById('vod-year');
+          if (el) { el.textContent = year; el.style.display = 'inline-block'; }
+        }
+        if (duration) {
+          const el = document.getElementById('vod-duration');
+          if (el) { el.textContent = duration; el.style.display = 'inline-block'; }
+        }
+        if (rating) {
+          const el = document.getElementById('vod-rating');
+          if (el) { el.textContent = rating; el.style.display = 'inline-block'; }
+        }
+        
+        let bd = '';
+        if (info.movie_data?.backdrop_path?.length) bd = info.movie_data.backdrop_path[0];
+        else if (mi.backdrop_path?.length) bd = mi.backdrop_path[0];
+        if (bd) document.getElementById('vod-hero-bg').style.backgroundImage = `url(${bd})`;
+
+        // TMDB Logic
+        const yrStr = (mi.releasedate || '').substring(0,4);
+        const tmdbMatch = await apiService.getTmdbMovie?.(movie.name, yrStr);
+        let castFound = false;
+        if (tmdbMatch && tmdbMatch.id && gallery) {
+           const cast = await apiService.getTmdbCast?.(tmdbMatch.id);
+           if (cast && cast.length > 0) {
+             castFound = true;
+             gallery.innerHTML = '';
+             cast.forEach(actor => {
+               if (!actor.profile_path) return;
+               const d = document.createElement('div');
+               d.className = 'cast-member';
+               d.innerHTML = `<img class="cast-photo" src="https://image.tmdb.org/t/p/w185${actor.profile_path}" loading="lazy">
+                              <span class="cast-name">${actor.name}</span>
+                              <span class="cast-role">${actor.character || ''}</span>`;
+               
+               d.addEventListener('click', () => {
+                 document.getElementById('actor-modal').style.display = 'flex';
+                 document.getElementById('actor-name').textContent = actor.name;
+                 document.getElementById('actor-character').textContent = actor.character ? `Rol: ${actor.character}` : '';
+                 document.getElementById('actor-photo').src = `https://image.tmdb.org/t/p/w185${actor.profile_path}`;
+                 
+                 const grid = document.getElementById('actor-movies-grid');
+                 grid.innerHTML = '<div class="spinner"></div> TMDB taranÄ±yor...';
+                 
+                 fetch(`https://api.themoviedb.org/3/person/${actor.id}/movie_credits?api_key=e9e9d8da18ae29fc430845952232787c&language=tr-TR`)
+                   .then(r => r.json())
+                   .then(res => {
+                      const movies = (res.cast||[]).slice(0, 10);
+                      if (!movies.length) { grid.innerHTML = '<span style="color:#aaa">KayÄ±t bulunamadÄ±.</span>'; return; }
+                      grid.innerHTML = '';
+                      movies.forEach(m => {
+                        const poster = m.poster_path ? `https://image.tmdb.org/t/p/w342${m.poster_path}` : '';
+                        if (!poster) return;
+                        const card = document.createElement('div');
+                        card.className = 'content-card';
+                        card.innerHTML = `<div class="card-thumb"><img src="${poster}" loading="lazy"></div>
+                                        <div class="card-info" style="padding:10px;"><div class="card-title" style="font-size:0.9rem;">${m.title}</div></div>`;
+                        grid.appendChild(card);
+                      });
+                   }).catch(() => grid.innerHTML = 'TMDB baÄŸlantÄ± hatasÄ±.');
+               });
+               gallery.appendChild(d);
+             });
+           }
+        }
+        if (!castFound && gallery) {
+          gallery.innerHTML = `<span style="color:#888;">TMDB oyuncu detaylarÄ± bulunamadÄ±. (Data: ${mi.cast || 'Yok'})</span>`;
+        }
+      }
+    } catch (e) {
+      document.getElementById('vod-plot').textContent = movie.description || 'Hata oluÅŸtu.';
+    }
+  }
+
+async showSeriesDetail(series) {
     const modal = document.getElementById('series-modal');
     if (!modal) return;
 

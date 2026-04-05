@@ -20,15 +20,18 @@ class SettingsModule {
    * Load settings from storage
    */
   loadSettings() {
-    this.settings = storageService.getSettings() || {
+    const savedSettings = storageService.getSettings() || {};
+    this.settings = {
       defaultQuality: CONFIG.PLAYER.DEFAULT_QUALITY,
       defaultVolume: CONFIG.PLAYER.DEFAULT_VOLUME,
       autoplay: CONFIG.PLAYER.AUTOPLAY,
       resumePlayback: CONFIG.PLAYER.RESUME_PLAYBACK,
+      continueWhileHidden: CONFIG.PLAYER.CONTINUE_WHILE_HIDDEN,
       theme: CONFIG.UI.THEME,
       showGuide: CONFIG.UI.SHOW_GUIDE,
       maxStreams: CONFIG.STREAMING.MAX_CONCURRENT_STREAMS,
       bandwidthSaving: CONFIG.STREAMING.BANDWIDTH_SAVING,
+      ...savedSettings,
     };
 
     this.applySettings();
@@ -72,6 +75,7 @@ class SettingsModule {
     const defaultVolume = document.getElementById('default-volume');
     const autoplay = document.getElementById('autoplay');
     const resumePlayback = document.getElementById('resume-playback');
+    const continueWhileHidden = document.getElementById('continue-while-hidden');
 
     if (defaultQuality) {
       defaultQuality.value = this.settings.defaultQuality;
@@ -101,6 +105,14 @@ class SettingsModule {
       resumePlayback.checked = this.settings.resumePlayback;
       resumePlayback.addEventListener('change', (e) => {
         this.settings.resumePlayback = e.target.checked;
+        this.saveSettings();
+      });
+    }
+
+    if (continueWhileHidden) {
+      continueWhileHidden.checked = this.settings.continueWhileHidden;
+      continueWhileHidden.addEventListener('change', (e) => {
+        this.settings.continueWhileHidden = e.target.checked;
         this.saveSettings();
       });
     }

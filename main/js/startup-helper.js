@@ -53,6 +53,20 @@ document.addEventListener('DOMContentLoaded', () => {
 
   console.log('✅ All components loaded successfully');
 
+  const playbackSettings = document.getElementById('playback-settings');
+  const resumePlaybackInput = document.getElementById('resume-playback');
+  if (playbackSettings && resumePlaybackInput && !document.getElementById('continue-while-hidden')) {
+    const settingGroup = document.createElement('div');
+    settingGroup.className = 'setting-group';
+    settingGroup.innerHTML = `
+      <label class="checkbox">
+        <input type="checkbox" id="continue-while-hidden" ${CONFIG.PLAYER.CONTINUE_WHILE_HIDDEN ? 'checked' : ''} />
+        <span>Arac hareket halindeyken oynatmaya devam et</span>
+      </label>
+    `;
+    resumePlaybackInput.closest('.setting-group')?.insertAdjacentElement('afterend', settingGroup);
+  }
+
   // Check if global instances are created
   setTimeout(() => {
     if (typeof app !== 'undefined' && app.ready) {
@@ -62,6 +76,24 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }, 1000);
 });
+
+// Prevent forced pause when Tesla changes page visibility while driving.
+document.addEventListener('visibilitychange', (event) => {
+  const continueWhileHidden =
+    typeof settingsModule !== 'undefined' && settingsModule?.getSetting
+      ? settingsModule.getSetting('continueWhileHidden', CONFIG.PLAYER.CONTINUE_WHILE_HIDDEN)
+      : CONFIG.PLAYER.CONTINUE_WHILE_HIDDEN;
+
+  if (!continueWhileHidden) return;
+  if (typeof playerModule === 'undefined' || !playerModule?.handleVisibilityChange) return;
+
+  playerModule.handleVisibilityChange(document.hidden, true);
+  event.stopImmediatePropagation();
+}, true);
+
+
+// Removed overriding feature patches to allow the new premium UI to take over.
+
 
 // Fallback error handler
 window.addEventListener('error', (event) => {

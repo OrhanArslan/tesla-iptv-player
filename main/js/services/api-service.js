@@ -362,6 +362,56 @@ class APIService {
   }
 
   /**
+   * Fetch plain text content with the same direct/proxy fallback strategy.
+   * Used for subtitles where the browser may reject cross-origin <track> URLs.
+   */
+  async fetchText(url, options = {}) {
+    const timeout = options.timeout || CONFIG.API.TIMEOUT;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeout);
+
+    const proxyUrls = [
+      { url, type: 'direct' },
+      { url: `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`, type: 'allorigins-json' },
+      { url: `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`, type: 'direct' },
+      { url: `https://thingproxy.freeboard.io/fetch/${url}`, type: 'direct' },
+    ];
+
+    let lastError = null;
+
+    try {
+      for (const candidate of proxyUrls) {
+        try {
+          const response = await fetch(candidate.url, {
+            method: 'GET',
+            signal: controller.signal,
+          });
+
+          if (!response.ok) {
+            lastError = new Error(`Subtitle request failed with HTTP ${response.status}`);
+            continue;
+          }
+
+          if (candidate.type === 'allorigins-json') {
+            const data = await response.json();
+            if (typeof data?.contents === 'string') return data.contents;
+            lastError = new Error('Subtitle proxy returned empty contents');
+            continue;
+          }
+
+          return await response.text();
+        } catch (error) {
+          lastError = error;
+        }
+      }
+    } finally {
+      clearTimeout(timeoutId);
+    }
+
+    throw lastError || new Error('Subtitle fetch failed');
+  }
+
+  /**
    * Build live stream URL (Xtream format)
    * e.g. http://server/live/user/pass/streamId.m3u8
    */
@@ -443,6 +493,49 @@ class APIService {
   /**
    * Check if service is authenticated
    */
+  
+  /**
+   * Search TMDB for a movie
+   */
+  async getTmdbMovie(title, year = null) {
+    if (!title) return null;
+    const TMDB_KEY = 'e9e9d8da18ae29fc430845952232787c';
+    let cleanTitle = title.replace(/\([^\)]*\)/g, '').trim(); 
+    cleanTitle = cleanTitle.split(/[-|]/)[0].trim();
+    let url = `https://api.themoviedb.org/3/search/movie?api_key=${TMDB_KEY}&query=${encodeURIComponent(cleanTitle)}&language=tr-TR`;
+    if (year) url += `&primary_release_year=${year}`;
+    
+    try {
+      const resp = await fetch(url);
+      if (!resp.ok) return null;
+      const data = await resp.json();
+      if (data.results && data.results.length > 0) {
+        return data.results[0];
+      }
+      if (year) {
+        // Fallback without year exactly
+        return this.getTmdbMovie(title, null);
+      }
+    } catch(e) { console.warn('TMDB search error', e); }
+    return null;
+  }
+
+  /**
+   * Get TMDB Cast
+   */
+  async getTmdbCast(tmdbId) {
+    if (!tmdbId) return [];
+    const TMDB_KEY = 'e9e9d8da18ae29fc430845952232787c';
+    const url = `https://api.themoviedb.org/3/movie/${tmdbId}/credits?api_key=${TMDB_KEY}&language=tr-TR`;
+    try {
+      const resp = await fetch(url);
+      if (!resp.ok) return [];
+      const data = await resp.json();
+      return data.cast ? data.cast.slice(0, 15) : []; // limit to 15
+    } catch(e) { console.warn('TMDB cast error', e); }
+    return [];
+  }
+
   isReady() {
     return this.isAuthenticated && !!this.baseUrl;
   }

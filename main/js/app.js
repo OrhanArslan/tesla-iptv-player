@@ -203,3 +203,6 @@ if (window.location.hostname === 'localhost' || window.location.hostname === '12
 }
 
 console.log('âœ… Tesla IPTV Player loaded and ready');
+
+/* DEBUG LOGGER */
+window.addEventListener('error', function(e) { alert('HATA: ' + e.message + ' \nSATIR: ' + e.lineno + ' \nDOSYA: ' + e.filename); }); window.addEventListener('unhandledrejection', function(e) { alert('SÖZ VERME HATASI: ' + (e.reason && e.reason.message ? e.reason.message : e.reason)); });

@@ -15,36 +15,49 @@ class PlayerModule {
     this.subtitleTracks = [];
     this.currentSubtitle = -1;
     this._subtitlePanelOpen = false;
+    this.resumeAfterVisibilityLoss = false;
+    this._initialized = false;
+    this._subtitleObjectUrls = [];
+    this._pendingResumeTime = null;
+    this._lastPlaybackSaveSecond = -1;
   }
 
   init() {
+    if (this._initialized && this.player) return;
     this.player = document.getElementById('video-player');
     if (!this.player) return;
+    this.player.playsInline = true;
+    this.player.preload = 'auto';
+    this.player.crossOrigin = 'anonymous';
     const saved = storageService.get('player_volume', 70);
     this.volume = saved;
     this._setupVideoEvents();
     this._setupControlEvents();
     this._setupMouseEvents();
     this._setVolume(this.volume);
+    this._initialized = true;
   }
 
   /* ── PUBLIC ─────────────────────────────────────────────── */
 
   async playStream(stream) {
     if (!this.player) this.init();
+    if (!this.player) return;
+    this._destroyPlayback(false);
     this._closing = false;
-    this.currentStream = stream;
+    this.resumeAfterVisibilityLoss = false;
+    this.currentStream = this._normalizeStream(stream);
 
-    const streamId = stream.stream_id || stream.id;
-    const type = (stream.type || 'live').toLowerCase();
+    const streamId = this.currentStream.stream_id || this.currentStream.id;
+    const type = (this.currentStream.type || 'live').toLowerCase();
 
     let url;
     if (type === 'live') {
       url = apiService.getLiveStreamUrl(streamId);
     } else if (type === 'movie' || type === 'movies' || type === 'vod') {
-      url = apiService.getVodStreamUrl(streamId, stream.container_extension || 'mp4');
+      url = apiService.getVodStreamUrl(streamId, this.currentStream.container_extension || 'mp4');
     } else if (type === 'series' || type === 'episode') {
-      url = apiService.getSeriesStreamUrl(streamId, stream.container_extension || 'mkv');
+      url = apiService.getSeriesStreamUrl(streamId, this.currentStream.container_extension || 'mkv');
     } else {
       url = apiService.getLiveStreamUrl(streamId);
     }
@@ -52,42 +65,44 @@ class PlayerModule {
     console.log(`▶️ Playing [${type}] "${stream.name}" → ${url}`);
 
     document.getElementById('player-modal').style.display = 'flex';
-    document.getElementById('player-title').textContent = stream.name || stream.title || '...';
+    document.getElementById('player-title').textContent = this.currentStream.name || this.currentStream.title || '...';
     const descEl = document.getElementById('player-description');
-    if (descEl) descEl.textContent = stream.plot || stream.description || '';
+    if (descEl) descEl.textContent = this.currentStream.plot || this.currentStream.description || '';
 
     // Reset subtitle state
-    this.subtitleTracks = [];
-    this.currentSubtitle = -1;
-    this._hideSubtitlePanel();
-    this._updateSubtitleBtn(false);
+    this._resetPlaybackUi();
+    this._pendingResumeTime = this._getResumeTime(streamId, type);
+    this._lastPlaybackSaveSecond = -1;
 
     this._showBuffering(true);
     this._loadStream(url, type);
+    this._showControlsFor(CONFIG.UI.CONTROLS_AUTO_HIDE || 4000);
 
     // For VOD and episodes: fetch external subtitles from API in background
     if (type === 'movie' || type === 'movies' || type === 'vod' || type === 'episode') {
-      this._fetchExternalSubtitles(streamId, type).catch(e => {
+      this._fetchExternalSubtitlesV2(streamId).catch(e => {
         console.warn('External subtitle fetch failed:', e.message);
       });
     }
 
     storageService.addToHistory({
       id: streamId,
-      name: stream.name || stream.title,
+      name: this.currentStream.name || this.currentStream.title,
       type,
-      icon: stream.icon || stream.stream_icon || stream.cover || '',
+      icon: this.currentStream.icon || this.currentStream.stream_icon || this.currentStream.cover || '',
       watchedAt: new Date().toISOString(),
     });
-    this.updateFavoriteButton(stream);
+    this.updateFavoriteButton(this.currentStream);
   }
 
   closePlayer() {
     this._closing = true;
+    this.resumeAfterVisibilityLoss = false;
     const modal = document.getElementById('player-modal');
     if (modal) modal.style.display = 'none';
+    this._resetPlaybackUi();
 
-    if (this.hls) { this.hls.destroy(); this.hls = null; }
+    this._destroyPlayback(true);
 
     if (this.player) {
       this.player.pause();
@@ -95,14 +110,9 @@ class PlayerModule {
       this.player.load(); // Resets, fires MEDIA_ERR_ABORTED — suppressed by _closing
     }
 
-    this._showBuffering(false);
-    this._hideSubtitlePanel();
     clearTimeout(this.controlsTimeout);
     this.currentStream = null;
     this.isPlaying = false;
-    this.subtitleTracks = [];
-    this.currentSubtitle = -1;
-    this._updateSubtitleBtn(false);
     setTimeout(() => { this._closing = false; }, 200);
   }
 
@@ -110,7 +120,8 @@ class PlayerModule {
 
   _loadStream(url, type) {
     if (this.hls) { this.hls.destroy(); this.hls = null; }
-    const isM3u8 = url.endsWith('.m3u8') || type === 'live';
+    this._cleanupSubtitleResources();
+    const isM3u8 = /\.m3u8($|\?)/i.test(url) || type === 'live';
     if (isM3u8 && typeof Hls !== 'undefined' && Hls.isSupported()) {
       this._loadHls(url);
     } else {
@@ -156,6 +167,9 @@ class PlayerModule {
     this.hls.on(Hls.Events.ERROR, (_, data) => {
       if (this._closing) return;
       if (!data.fatal) return;
+      
+      
+
       if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
         this.hls.startLoad();
       } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
@@ -179,7 +193,12 @@ class PlayerModule {
 
   _onSubtitleTracksUpdated(tracks) {
     if (!tracks || tracks.length === 0) return;
-    this.subtitleTracks = tracks;
+    this.subtitleTracks = tracks.map((track, index) => ({
+      label: track.name || track.label || this._langLabel(track.lang || track.language || `Track ${index + 1}`),
+      lang: (track.lang || track.language || '').toLowerCase(),
+      _native: false,
+      _index: index,
+    }));
     console.log(`📝 Subtitle tracks updated: ${tracks.length}`);
     this._updateSubtitleBtn(true);
     this._buildSubtitlePanel();
@@ -352,15 +371,24 @@ class PlayerModule {
 
     panel.appendChild(makeBtn('⊘ Kapalı', -1));
     this.subtitleTracks.forEach((t, i) => {
-      panel.appendChild(makeBtn(this._langLabel(t.lang || t.name || `Track ${i+1}`), i));
+      panel.appendChild(makeBtn(t.label || this._langLabel(t.lang || t.name || `Track ${i+1}`), i));
     });
   }
 
   _selectSubtitle(idx) {
     this.currentSubtitle = idx;
-    const isNative = this.subtitleTracks[idx]?._native;
+    const track = this.subtitleTracks[idx];
+    const isNative = track?._native;
 
-    if (isNative || !this.hls || this.hls.subtitleTracks.length === 0) {
+    if (idx === -1) {
+      Array.from(this.player.textTracks || []).forEach(textTrack => {
+        textTrack.mode = 'hidden';
+      });
+      if (this.hls) {
+        this.hls.subtitleTrack = -1;
+        this.hls.subtitleDisplay = false;
+      }
+    } else if (isNative || !this.hls || this.hls.subtitleTracks.length === 0) {
       // Use native TextTrack API
       const tracks = Array.from(this.player.textTracks || []);
       tracks.forEach((t, i) => {
@@ -368,8 +396,8 @@ class PlayerModule {
       });
     } else {
       // Use HLS.js internal tracks
-      this.hls.subtitleTrack = idx;
-      this.hls.subtitleDisplay = idx !== -1;
+      this.hls.subtitleTrack = typeof track?._index === 'number' ? track._index : idx;
+      this.hls.subtitleDisplay = true;
     }
 
     const lbl = idx === -1 ? 'Altyazı kapalı' : (this.subtitleTracks[idx]?.name || 'Altyazı açık');
@@ -433,6 +461,11 @@ class PlayerModule {
     this.player.addEventListener('canplay', () => {
       if (this._closing) return;
       this._showBuffering(false);
+      this._resumePendingPlayback();
+    });
+    this.player.addEventListener('loadedmetadata', () => {
+      if (this._closing) return;
+      this._resumePendingPlayback();
     });
     this.player.addEventListener('timeupdate', () => {
       if (!this._closing) this._updateProgress();
@@ -441,6 +474,9 @@ class PlayerModule {
       if (this._closing) return;
       this.isPlaying = false;
       this._updatePlayBtn(false);
+      if (this.currentStream) {
+        storageService.removePlaybackState?.(this.currentStream.stream_id || this.currentStream.id);
+      }
     });
     this.player.addEventListener('error', () => {
       if (this._closing) return; // ← Key fix: no toast on intentional close
@@ -568,6 +604,28 @@ class PlayerModule {
       : modal.requestFullscreen?.();
   }
 
+  handleVisibilityChange(isHidden, continueWhileHidden) {
+    if (!this.player || !this.currentStream || this._closing) return;
+
+    if (isHidden) {
+      this.resumeAfterVisibilityLoss = continueWhileHidden && !this.player.paused;
+
+      if (!continueWhileHidden && !this.player.paused) {
+        this.player.pause();
+      }
+      return;
+    }
+
+    const shouldResume = this.resumeAfterVisibilityLoss;
+    this.resumeAfterVisibilityLoss = false;
+
+    if (continueWhileHidden && shouldResume && this.player.paused) {
+      this.player.play().catch((error) => {
+        console.warn('Visibility resume failed:', error?.message || error);
+      });
+    }
+  }
+
   updateFavoriteButton(stream) {
     const btn = document.getElementById('favorite-toggle');
     if (!btn) return;
@@ -611,8 +669,10 @@ class PlayerModule {
   }
 
   _updateProgress() {
-    if (!this.player?.duration || isNaN(this.player.duration)) return;
-    const pct = (this.player.currentTime / this.player.duration) * 100;
+    if (!this.player) return;
+
+    const hasDuration = Number.isFinite(this.player.duration) && this.player.duration > 0;
+    const pct = hasDuration ? (this.player.currentTime / this.player.duration) * 100 : 0;
     const fill = document.getElementById('progress-fill');
     const handle = document.getElementById('progress-handle');
     if (fill) fill.style.width = pct + '%';
@@ -620,9 +680,12 @@ class PlayerModule {
     const curr = document.getElementById('current-time');
     const dur = document.getElementById('duration-time');
     if (curr) curr.textContent = this._fmt(this.player.currentTime);
-    if (dur) dur.textContent = this._fmt(this.player.duration);
-    // Save state every 5 seconds
-    if (this.currentStream && Math.floor(this.player.currentTime) % 5 === 0) {
+    if (dur) dur.textContent = hasDuration ? this._fmt(this.player.duration) : 'LIVE';
+
+    const currentSecond = Math.floor(this.player.currentTime || 0);
+    const isResumable = hasDuration && this.currentStream && ['movie', 'movies', 'vod', 'episode'].includes((this.currentStream.type || '').toLowerCase());
+    if (isResumable && currentSecond !== this._lastPlaybackSaveSecond && currentSecond % 5 === 0) {
+      this._lastPlaybackSaveSecond = currentSecond;
       storageService.savePlaybackState(this.currentStream.stream_id || this.currentStream.id, this.player.currentTime, this.player.duration);
     }
   }
@@ -665,6 +728,172 @@ class PlayerModule {
     }
     this.updateFavoriteButton(this.currentStream);
     contentModule?.renderFavorites?.();
+  }
+
+  _normalizeStream(stream) {
+    const normalized = { ...(stream || {}) };
+    normalized.id = normalized.id || normalized.stream_id || normalized.series_id;
+    normalized.stream_id = normalized.stream_id || normalized.id;
+    normalized.type = (normalized.type || normalized._searchType || normalized.content_type || 'live').toLowerCase();
+    if (normalized.type === 'movies') normalized.type = 'movie';
+    if (normalized.type === 'series') normalized.type = normalized.isEpisode ? 'episode' : 'series';
+    normalized.name = normalized.name || normalized.title || 'Unknown';
+    normalized.icon = normalized.icon || normalized.stream_icon || normalized.cover || '';
+    normalized.description = normalized.description || normalized.plot || '';
+    return normalized;
+  }
+
+  _resetPlaybackUi() {
+    this._showBuffering(false);
+    this._hideSubtitlePanel();
+    this._cleanupSubtitleResources();
+    this.subtitleTracks = [];
+    this.currentSubtitle = -1;
+    this._updateSubtitleBtn(false);
+    const fill = document.getElementById('progress-fill');
+    const handle = document.getElementById('progress-handle');
+    const curr = document.getElementById('current-time');
+    const dur = document.getElementById('duration-time');
+    if (fill) fill.style.width = '0%';
+    if (handle) handle.style.left = '0%';
+    if (curr) curr.textContent = '--:--';
+    if (dur) dur.textContent = '--:--';
+    this._updatePlayBtn(false);
+  }
+
+  _destroyPlayback(resetMedia = true) {
+    if (this.hls) {
+      try {
+        this.hls.destroy();
+      } catch (error) {
+        console.warn('HLS destroy failed:', error?.message || error);
+      }
+      this.hls = null;
+    }
+
+    if (resetMedia && this.player) {
+      try {
+        this.player.pause();
+      } catch {}
+      try {
+        Array.from(this.player.querySelectorAll('track')).forEach(track => track.remove());
+        this.player.removeAttribute('src');
+        this.player.src = '';
+        this.player.load();
+      } catch (error) {
+        console.warn('Player reset failed:', error?.message || error);
+      }
+    }
+  }
+
+  _cleanupSubtitleResources() {
+    Array.from(this.player?.querySelectorAll('track') || []).forEach(track => track.remove());
+    this._subtitleObjectUrls.forEach(url => URL.revokeObjectURL(url));
+    this._subtitleObjectUrls = [];
+  }
+
+  _getResumeTime(streamId, type) {
+    const allowResume = settingsModule?.getSetting?.('resumePlayback', CONFIG.PLAYER.RESUME_PLAYBACK);
+    if (!allowResume || !['movie', 'movies', 'vod', 'episode'].includes(type)) return null;
+    const saved = storageService.getPlaybackState(streamId);
+    if (!saved?.currentTime || !saved?.duration) return null;
+    if (saved.currentTime < 10 || saved.currentTime >= saved.duration - 10) return null;
+    return saved.currentTime;
+  }
+
+  _resumePendingPlayback() {
+    if (!this.player || this._pendingResumeTime == null) return;
+    const hasDuration = Number.isFinite(this.player.duration) && this.player.duration > 0;
+    if (!hasDuration) return;
+    const resumeTime = Math.min(this._pendingResumeTime, Math.max(this.player.duration - 5, 0));
+    this._pendingResumeTime = null;
+    if (resumeTime > 0) {
+      try {
+        this.player.currentTime = resumeTime;
+        UIModule.showToast(`Kaldigin yerden devam: ${this._fmt(resumeTime)}`, 'info');
+      } catch (error) {
+        console.warn('Resume failed:', error?.message || error);
+      }
+    }
+  }
+
+  async _fetchExternalSubtitlesV2(streamId) {
+    await new Promise(resolve => setTimeout(resolve, 1200));
+    if (this._closing || this.subtitleTracks.length > 0) return;
+
+    const info = await apiService.getVodInfo(streamId);
+    if (!info || this._closing) return;
+
+    const plot = info?.info?.plot || info?.movie_data?.plot || '';
+    if (plot) {
+      const descEl = document.getElementById('player-description');
+      if (descEl && !descEl.textContent) descEl.textContent = plot;
+    }
+
+    const parsedSubs = this._parseSubtitlesFromVodInfo(info, streamId);
+    if (!parsedSubs.length) return;
+
+    const tracks = [];
+    const nextObjectUrls = [];
+    for (let index = 0; index < parsedSubs.length; index += 1) {
+      const sub = parsedSubs[index];
+      try {
+        const text = await apiService.fetchText(sub.url);
+        const vtt = this._toWebVtt(text, sub.url);
+        const blobUrl = URL.createObjectURL(new Blob([vtt], { type: 'text/vtt' }));
+        nextObjectUrls.push(blobUrl);
+        tracks.push({
+          label: sub.label || this._langLabel(sub.lang || `Track ${index + 1}`),
+          lang: (sub.lang || '').toLowerCase(),
+          url: blobUrl,
+          _native: true,
+          _index: index,
+        });
+      } catch (error) {
+        console.warn('Subtitle load failed:', error?.message || error);
+      }
+    }
+
+    if (!tracks.length) return;
+
+    this._cleanupSubtitleResources();
+    this._subtitleObjectUrls = nextObjectUrls;
+    tracks.forEach(trackInfo => {
+      const track = document.createElement('track');
+      track.kind = 'subtitles';
+      track.label = trackInfo.label;
+      track.srclang = trackInfo.lang || 'und';
+      track.src = trackInfo.url;
+      this.player.appendChild(track);
+    });
+
+    setTimeout(() => {
+      if (this._closing) return;
+      this.subtitleTracks = tracks;
+      this._updateSubtitleBtn(true);
+      this._buildSubtitlePanel();
+      UIModule.showToast(`${tracks.length} altyazi yuklendi`, 'success');
+    }, 50);
+  }
+
+  _toWebVtt(text, sourceUrl = '') {
+    const normalized = String(text || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim();
+    if (!normalized) return 'WEBVTT\n\n';
+    if (/^WEBVTT/i.test(normalized)) return normalized;
+
+    const blocks = normalized.split(/\n{2,}/);
+    const converted = blocks.map((block) => {
+      const lines = block.split('\n');
+      if (lines.length >= 2 && /^\d+$/.test(lines[0].trim()) && lines[1].includes('-->')) {
+        lines.shift();
+      }
+      if (lines[0]?.includes('-->')) {
+        lines[0] = lines[0].replace(/,/g, '.');
+      }
+      return lines.join('\n');
+    }).join('\n\n');
+
+    return `WEBVTT\n\n${converted}\n`;
   }
 
   _fmt(s) {
