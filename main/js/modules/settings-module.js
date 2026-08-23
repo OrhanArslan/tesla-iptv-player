@@ -65,6 +65,9 @@ class SettingsModule {
 
     // Streaming settings
     this.setupStreamingSettings();
+
+    // Bypass settings
+    this.setupBypassSettings();
   }
 
   /**
@@ -172,6 +175,80 @@ class SettingsModule {
     }
   }
 
+
+  /**
+   * Setup bypass settings
+   */
+  setupBypassSettings() {
+    const bypassEnabled = document.getElementById('bypass-enabled');
+    const bypassMockSpeed = document.getElementById('bypass-mock-speed');
+    const bypassMockGear = document.getElementById('bypass-mock-gear');
+    const bypassAutoResume = document.getElementById('bypass-auto-resume');
+    const bypassPreventPause = document.getElementById('bypass-prevent-pause');
+    const bypassToggleBtn = document.getElementById('bypass-toggle-btn');
+
+    // Sync checkbox states from bypassModule settings
+    if (typeof bypassModule !== 'undefined') {
+      if (bypassEnabled) bypassEnabled.checked = bypassModule.settings.enabled;
+      if (bypassMockSpeed) bypassMockSpeed.checked = bypassModule.settings.mockSpeed;
+      if (bypassMockGear) bypassMockGear.checked = bypassModule.settings.mockGear;
+      if (bypassAutoResume) bypassAutoResume.checked = bypassModule.settings.autoResume;
+      if (bypassPreventPause) bypassPreventPause.checked = bypassModule.settings.preventPause;
+    }
+
+    // Wire up change events
+    if (bypassEnabled) {
+      bypassEnabled.addEventListener('change', (e) => {
+        if (typeof bypassModule !== 'undefined') {
+          bypassModule.settings.enabled = e.target.checked;
+          if (e.target.checked) { bypassModule.start(); } else { bypassModule.stop(); }
+          bypassModule.saveSettings();
+          this._updateBypassDot();
+        }
+      });
+    }
+
+    const settingMap = {
+      'bypass-mock-speed': 'mockSpeed',
+      'bypass-mock-gear': 'mockGear',
+      'bypass-auto-resume': 'autoResume',
+      'bypass-prevent-pause': 'preventPause',
+    };
+    Object.entries(settingMap).forEach(([elId, key]) => {
+      const el = document.getElementById(elId);
+      if (el) {
+        el.addEventListener('change', (e) => {
+          if (typeof bypassModule !== 'undefined') {
+            bypassModule.updateSetting(key, e.target.checked);
+          }
+        });
+      }
+    });
+
+    // Bypass toggle button in header
+    if (bypassToggleBtn) {
+      bypassToggleBtn.addEventListener('click', () => {
+        if (typeof bypassModule !== 'undefined') {
+          bypassModule.toggle();
+          if (bypassEnabled) bypassEnabled.checked = bypassModule.isRunning;
+          this._updateBypassDot();
+          UIModule.showToast(bypassModule.isRunning ? 'Bypass aktif' : 'Bypass devre disi', 'info');
+        }
+      });
+    }
+
+    this._updateBypassDot();
+  }
+
+  /**
+   * Update bypass dot indicator color
+   */
+  _updateBypassDot() {
+    const dot = document.getElementById('bypass-dot');
+    if (dot && typeof bypassModule !== 'undefined') {
+      dot.style.background = bypassModule.isRunning ? '#00ff88' : '#ff4757';
+    }
+  }
   /**
    * Switch settings tab
    */

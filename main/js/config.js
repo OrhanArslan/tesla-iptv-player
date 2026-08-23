@@ -98,6 +98,16 @@ const CONFIG = {
     UPDATE_INTERVAL: 3600000, // 1 hour
   },
 
+  // Tesla Bypass Configuration
+  BYPASS: {
+    ENABLED: true,
+    MOCK_SPEED: true,
+    MOCK_GEAR: true,
+    AUTO_RESUME: true,
+    PREVENT_PAUSE: true,
+    FAKE_LOCATION: { lat: 41.0082, lng: 28.9784 },
+  },
+
   // Timeout & Retry Configuration
   TIMEOUT: {
     API_CALL: 30000,

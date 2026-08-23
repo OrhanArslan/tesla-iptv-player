@@ -26,8 +26,16 @@ class EPGModule {
 
       container.innerHTML = '<div style="text-align:center;padding:20px;">Loading EPG...</div>';
 
-      // Load EPG data for first few channels
-      const channels = contentModule.content.live.slice(0, 20);
+      // Safe extraction of live channels from loadedData
+      let liveChannels = [];
+      if (typeof contentModule !== 'undefined' && contentModule.loadedData) {
+        Object.entries(contentModule.loadedData).forEach(([key, streams]) => {
+          if (key.startsWith('live_') && Array.isArray(streams)) {
+            liveChannels.push(...streams);
+          }
+        });
+      }
+      const channels = liveChannels.slice(0, 20);
       const epgEntries = [];
 
       for (const channel of channels) {

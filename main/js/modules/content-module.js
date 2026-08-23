@@ -113,6 +113,13 @@ class ContentModule {
       } else {
         streams = await this._fetchStreams(type, catId);
       }
+
+      // MEMORY OPTIMIZATION: Keep only the most recent 3 categories in RAM
+      const keys = Object.keys(this.loadedData);
+      if (keys.length > 2) {
+        delete this.loadedData[keys[0]];
+      }
+
       this.loadedData[key] = streams;
       this._renderGrid(gridEl, streams, type);
     } catch (e) {
@@ -134,9 +141,26 @@ class ContentModule {
       return;
     }
     const favIds = new Set(storageService.getFavorites().map(f => String(f.id)));
+    const INITIAL_LIMIT = 150;
+    const initialBatch = streams.slice(0, INITIAL_LIMIT);
     const frag = document.createDocumentFragment();
-    streams.forEach(s => frag.appendChild(this._makeCard(s, type, favIds)));
+    initialBatch.forEach(s => frag.appendChild(this._makeCard(s, type, favIds)));
     gridEl.appendChild(frag);
+
+    // Async render the rest to prevent UI freeze on Tesla
+    if (streams.length > INITIAL_LIMIT) {
+      let idx = INITIAL_LIMIT;
+      const renderNextBatch = () => {
+        if (idx >= streams.length || gridEl.innerHTML === '') return; // Stop if changed
+        const batch = streams.slice(idx, idx + 100);
+        const bFrag = document.createDocumentFragment();
+        batch.forEach(s => bFrag.appendChild(this._makeCard(s, type, favIds)));
+        gridEl.appendChild(bFrag);
+        idx += 100;
+        requestAnimationFrame(renderNextBatch);
+      };
+      setTimeout(() => requestAnimationFrame(renderNextBatch), 50);
+    }
   }
 
   /* ── CARD ──────────────────────────────────────────────── */

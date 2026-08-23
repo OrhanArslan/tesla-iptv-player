@@ -70,7 +70,7 @@ class APIService {
    */
   async request(endpoint, params = {}, options = {}) {
     const maxRetries = options.retries || CONFIG.API.RETRY_ATTEMPTS;
-    const timeout = options.timeout || CONFIG.API.TIMEOUT;
+    const timeout = options.timeout || 3500; // Force faster failover for subtitles
 
     for (let attempt = 0; attempt < maxRetries; attempt++) {
       try {
@@ -366,7 +366,7 @@ class APIService {
    * Used for subtitles where the browser may reject cross-origin <track> URLs.
    */
   async fetchText(url, options = {}) {
-    const timeout = options.timeout || CONFIG.API.TIMEOUT;
+    const timeout = options.timeout || 3500; // Force faster failover for subtitles
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeout);
 

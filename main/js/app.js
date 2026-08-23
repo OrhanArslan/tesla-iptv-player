@@ -44,6 +44,13 @@ class TeslaIPTVApp {
       // Initialize modules
       settingsModule.init();
       playerModule.init();
+      bypassModule.init();
+      if (bypassModule.settings.enabled) { 
+        bypassModule.start();
+        if (typeof settingsModule !== 'undefined' && typeof settingsModule._updateBypassDot === 'function') {
+          settingsModule._updateBypassDot();
+        }
+      }
       epgModule.init();
 
       // Preload cache
@@ -114,6 +121,7 @@ const playerModule = new PlayerModule();
 const contentModule = new ContentModule();
 const epgModule = new EPGModule();
 const settingsModule = new SettingsModule();
+const bypassModule = new TeslaBypassModule();
 
 // Create global app instance
 const app = new TeslaIPTVApp();
@@ -129,8 +137,12 @@ window.addEventListener('beforeunload', () => {
   app.handleUnload();
 });
 
-// Handle visibility changes
+// Handle visibility changes (bypass-aware)
 document.addEventListener('visibilitychange', () => {
+  // Skip pause if bypass is running
+  if (typeof bypassModule !== 'undefined' && bypassModule.isRunning) {
+    return;
+  }
   if (document.hidden) {
     console.log('⏸️ App hidden');
     if (playerModule.player) {
@@ -200,9 +212,8 @@ if (window.location.hostname === 'localhost' || window.location.hostname === '12
   window.playerModule = playerModule;
   window.contentModule = contentModule;
   window.settingsModule = settingsModule;
+  window.bypassModule = bypassModule;
 }
 
 console.log('✅ Tesla IPTV Player loaded and ready');
 
-/* DEBUG LOGGER */
-window.addEventListener('error', function(e) { alert('HATA: ' + e.message + ' \nSATIR: ' + e.lineno + ' \nDOSYA: ' + e.filename); }); window.addEventListener('unhandledrejection', function(e) { alert('S�Z VERME HATASI: ' + (e.reason && e.reason.message ? e.reason.message : e.reason)); });

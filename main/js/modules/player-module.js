@@ -152,9 +152,11 @@ class PlayerModule {
   _loadHls(url, token = this._playbackToken) {
     const cfg = Object.assign({
       enableWorker: true,
-      startLevel: -1,
-      maxBufferLength: 30,
-      maxMaxBufferLength: 600,
+      startLevel: 0, // Force lowest/first quality on startup to avoid black screen in Tesla
+      maxBufferLength: 15, // Reduced from 30s to save Tesla RAM
+      maxMaxBufferLength: 300,
+      liveSyncDurationCount: 3,
+      liveMaxLatencyDurationCount: 10,
     }, (CONFIG.PLAYER || {}).HLS_CONFIG || {});
 
     const recovery = { network: 0, media: 0 };
@@ -192,10 +194,7 @@ class PlayerModule {
       }
     });
 
-    this.hls.on(Hls.Events.FRAG_BUFFERED, () => {
-      if (token !== this._playbackToken || this._closing) return;
-      this._handleSourceFailure(new Error(err.message || `Media error ${err.code}`), this._playbackToken);
-    });
+    this.hls.on(Hls.Events.FRAG_BUFFERED, () => { if (token !== this._playbackToken || this._closing) return; this._clearLoadWatchdog(); });
 
     this.hls.on(Hls.Events.ERROR, (_, data) => {
       if (this._closing || token !== this._playbackToken) return;
@@ -211,7 +210,6 @@ class PlayerModule {
         this.hls.recoverMediaError();
       } else {
         this._handleSourceFailure(new Error(data.details || data.type || 'HLS error'), token);
-        return;
         UIModule.showToast('Yayın yüklenemedi', 'error');
         this._showBuffering(false);
       }
@@ -287,7 +285,12 @@ class PlayerModule {
   _updateAudioBtn(show) {
     const btn = document.getElementById('audio-btn');
     if (!btn) return;
-    btn.style.display = show ? 'flex' : 'none';
+    btn.style.display = 'flex'; // ALWAYS show CC button for UX
+    if (!show && this.subtitleTracks.length === 0) {
+      btn.style.opacity = '0.5';
+    } else {
+      btn.style.opacity = '1';
+    }
     btn.classList.toggle('active', show && this.currentAudioTrack !== -1);
   }
 
@@ -497,7 +500,7 @@ class PlayerModule {
 
   _selectSubtitle(idx) {
     this.currentSubtitle = idx;
-    const track = this.subtitleTracks[idx];
+    const track = idx !== -1 ? this.subtitleTracks[idx] : null;
     const isNative = track?._native;
 
     if (idx === -1) {
@@ -510,10 +513,7 @@ class PlayerModule {
       }
     } else if (isNative || !this.hls || this.hls.subtitleTracks.length === 0) {
       // Use native TextTrack API
-      const tracks = Array.from(this.player.textTracks || []);
-      tracks.forEach((t, i) => {
-        t.mode = (idx !== -1 && i === idx) ? 'showing' : 'hidden';
-      });
+      Array.from(this.player.textTracks || []).forEach(t => { t.mode = 'hidden'; }); if (track?._domTrack && track._domTrack.track) { track._domTrack.track.mode = 'showing'; } else if (this.player.textTracks[idx]) { this.player.textTracks[idx].mode = 'showing'; }
     } else {
       // Use HLS.js internal tracks
       this.hls.subtitleTrack = typeof track?._index === 'number' ? track._index : idx;
@@ -538,7 +538,12 @@ class PlayerModule {
   _updateSubtitleBtn(show) {
     const btn = document.getElementById('subtitle-btn');
     if (!btn) return;
-    btn.style.display = show ? 'flex' : 'none';
+    btn.style.display = 'flex'; // ALWAYS show CC button for UX
+    if (!show && this.subtitleTracks.length === 0) {
+      btn.style.opacity = '0.5';
+    } else {
+      btn.style.opacity = '1';
+    }
     btn.classList.toggle('active', this.currentSubtitle !== -1);
     btn.title = this.currentSubtitle !== -1
       ? `Altyazı açık — değiştir (C)`
@@ -547,6 +552,10 @@ class PlayerModule {
 
   _toggleSubtitlePanel(e) {
     if (e) e.stopPropagation();
+    if (this.subtitleTracks.length === 0) {
+      UIModule.showToast('Bu i?erikte (IPTV sunucusunda) altyaz? bulunamad?', 'warning');
+      return;
+    }
     const panel = document.getElementById('subtitle-panel');
     if (!panel) return;
     this._subtitlePanelOpen = !this._subtitlePanelOpen;
@@ -611,7 +620,7 @@ class PlayerModule {
       if (!err || err.code === 1) return;
       console.error('Video error:', err.code, err.message);
       this._handleSourceFailure(new Error(err.message || `Media error ${err.code}`), this._playbackToken);
-      UIModule.showToast('Video hata: ' + (err.message || 'Yayın yüklenemedi'), 'error');
+      // Toast removed for seamless fallback
     });
 
     this.player.addEventListener('volumechange', () => {
@@ -1046,13 +1055,9 @@ class PlayerModule {
       preferred.push(clean);
     };
 
-    if (!ext || this._isRiskyContainer(ext)) {
-      addExt('mp4');
-      addExt('m4v');
-    } else {
-      addExt(ext);
-      if (ext !== 'mp4') addExt('mp4');
-    }
+    addExt('m3u8'); // 1. HLS FIRST: Forces Xtream server to extract embedded MKV subtitles
+    if (ext && ext !== 'm3u8') addExt(ext); // 2. Fallback to native (fast but no embedded subs)
+    if (ext !== 'mp4') addExt('mp4');       // 3. Fallback to mp4
 
     preferred.forEach((candidateExt) => {
       const url = ['movie', 'vod'].includes(type)
@@ -1225,8 +1230,7 @@ class PlayerModule {
       if (descEl && !descEl.textContent) descEl.textContent = plot;
     }
 
-    const parsedSubs = this._parseSubtitlesFromVodInfo(info, streamId);
-    if (!parsedSubs.length) return;
+    const parsedSubs = this._parseSubtitlesFromVodInfo(info, streamId); if (!parsedSubs.length) { parsedSubs.push({ lang: 'tr', label: 'T?rk?e', url: this._buildSubtitleUrl(streamId, 'tr') }, { lang: 'en', label: 'English', url: this._buildSubtitleUrl(streamId, 'en') }, { lang: 'de', label: 'Deutsch', url: this._buildSubtitleUrl(streamId, 'de') }); }
 
     const tracks = [];
     const nextObjectUrls = [];
@@ -1260,6 +1264,7 @@ class PlayerModule {
       track.srclang = trackInfo.lang || 'und';
       track.src = trackInfo.url;
       this.player.appendChild(track);
+      trackInfo._domTrack = track; // Save ref for accurate enabling
     });
 
     setTimeout(() => {

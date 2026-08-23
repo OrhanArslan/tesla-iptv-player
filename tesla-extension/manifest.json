@@ -1,0 +1,20 @@
+{
+  "manifest_version": 3,
+  "name": "Tesla IPTV Video Bypass",
+  "version": "1.0.0",
+  "description": "Tesla araç tarayıcısında hareket halindeyken video oynatma bypass'ı",
+  "permissions": ["activeTab", "scripting", "storage"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [{
+    "matches": ["<all_urls>"],
+    "js": ["content.js"],
+    "all_frames": true,
+    "run_at": "document_start"
+  }],
+  "action": {
+    "default_title": "Tesla Video Bypass"
+  },
+  "icons": {}
+}

@@ -83,6 +83,12 @@
       </div>
     </div>
     <div class="header-right">
+      <button id="bypass-toggle-btn" class="icon-btn" title="Tesla Bypass" style="position:relative;">
+        <svg id="bypass-status-indicator" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+        </svg>
+        <span id="bypass-dot" style="position:absolute;top:2px;right:2px;width:8px;height:8px;border-radius:50%;background:#ff4757;border:1px solid rgba(0,0,0,0.3);"></span>
+      </button>
       <button id="settings-btn" class="icon-btn" title="Ayarlar">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>
@@ -210,7 +216,7 @@
 
               <!-- Subtitle selector -->
               <div class="subtitle-wrapper">
-                <button id="subtitle-btn" class="control-btn sub-btn" title="Altyazı (C)" style="display:none;">
+                <button id="subtitle-btn" class="control-btn sub-btn" style="display:flex !important;">
                   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <rect x="2" y="4" width="20" height="16" rx="2"/>
                     <path d="M7 15h4m4 0h2M7 11h2m4 0h6"/>
@@ -334,6 +340,7 @@
       </div>
       <div class="settings-tabs">
         <button class="settings-tab active" data-tab="playback">Oynatma</button>
+        <button class="settings-tab" data-tab="bypass">Tesla Bypass</button>
         <button class="settings-tab" data-tab="about">Hakkında</button>
       </div>
       <div class="settings-content">
@@ -347,10 +354,45 @@
           </div>
           <button class="btn btn-danger mt-2" id="clear-cache-btn">Önbelleği Temizle</button>
         </div>
+        <div class="settings-panel" id="bypass-settings">
+          <div class="setting-group" style="background:rgba(0,217,255,0.05);border:1px solid rgba(0,217,255,0.15);border-radius:8px;padding:16px;margin-bottom:16px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+              <span style="font-size:16px;font-weight:600;color:#00d9ff;">Bypass Durumu</span>
+              <span id="bypass-status-text" style="font-weight:600;">Devre Disi</span>
+            </div>
+            <div style="display:flex;gap:12px;flex-wrap:wrap;font-size:13px;color:#8b8b8b;">
+              <span>Hiz: <strong id="bypass-mocked-speed">--</strong></span>
+              <span>Vites: <strong id="bypass-mocked-gear">--</strong></span>
+              <span id="bypass-video-state"></span>
+            </div>
+          </div>
+          <div class="setting-group">
+            <label class="checkbox"><input type="checkbox" id="bypass-enabled" checked /><span>Bypass Etkinlestir</span></label>
+          </div>
+          <div class="setting-group">
+            <label class="checkbox"><input type="checkbox" id="bypass-mock-speed" checked /><span>Sahte Hiz Raporla (0 km/h)</span></label>
+          </div>
+          <div class="setting-group">
+            <label class="checkbox"><input type="checkbox" id="bypass-mock-gear" checked /><span>Sahte Vites Durumu (PARK)</span></label>
+          </div>
+          <div class="setting-group">
+            <label class="checkbox"><input type="checkbox" id="bypass-auto-resume" checked /><span>Otomatik Video Devam</span></label>
+          </div>
+          <div class="setting-group">
+            <label class="checkbox"><input type="checkbox" id="bypass-prevent-pause" checked /><span>Pause Komutlarini Engelle</span></label>
+          </div>
+          <div class="setting-group" style="margin-top:16px;">
+            <div style="background:rgba(0,0,0,0.3);border-radius:8px;padding:12px;max-height:150px;overflow-y:auto;">
+              <div style="font-size:12px;color:#8b8b8b;margin-bottom:6px;">Bypass Loglari:</div>
+              <div id="bypass-log" style="font-size:11px;font-family:monospace;"></div>
+            </div>
+          </div>
+        </div>
         <div class="settings-panel" id="about-settings">
           <div class="about-info">
             <p><strong>Tesla IPTV Player v2.0</strong></p>
             <p>Professional Xtream Codes IPTV Streaming Solution</p>
+            <p style="margin-top:8px;color:#00d9ff;">+ Tesla Video Bypass Pro Entegre</p>
           </div>
         </div>
       </div>
@@ -380,19 +422,20 @@
 
 </div><!-- #app -->
 
-<script src="js/config.js"></script>
-<script src="js/services/storage-service.js"></script>
-<script src="js/services/api-service.js"></script>
-<script src="js/services/cache-service.js"></script>
-<script src="js/modules/ui-module.js"></script>
-<script src="js/modules/auth-module.js"></script>
-<script src="js/modules/player-module.js"></script>
+<script src="js/config.js?v=1787491083.87292"></script>
+<script src="js/services/storage-service.js?v=1787491083.87292"></script>
+<script src="js/services/api-service.js?v=1787491083.87292"></script>
+<script src="js/services/cache-service.js?v=1787491083.87292"></script>
+<script src="js/modules/ui-module.js?v=1787491083.87292"></script>
+<script src="js/modules/auth-module.js?v=1787491083.87292"></script>
+<script src="js/modules/player-module.js?v=1787491083.87292"></script>
 <script src="js/modules/content-module.js?v=e8d275d6"></script>
 <script src="js/feature-overrides.js?v=20260407"></script>
-<script src="js/modules/epg-module.js"></script>
-<script src="js/modules/settings-module.js"></script>
-<script src="js/app.js"></script>
-<script src="js/startup-helper.js"></script>
+<script src="js/modules/epg-module.js?v=1787491083.87292"></script>
+<script src="js/modules/settings-module.js?v=1787491083.87292"></script>
+<script src="js/modules/tesla-bypass-module.js?v=1787491083.87292"></script>
+<script src="js/app.js?v=1787491083.87292"></script>
+<script src="js/startup-helper.js?v=1787491083.87292"></script>
 
   <!-- ═══ ACTOR DETAILS MODAL ══════════════════════════════════ -->
   <div id="actor-modal" class="modal" style="display:none; z-index: 9999;">
