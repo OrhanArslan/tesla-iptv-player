@@ -202,8 +202,12 @@ class StorageService {
    */
   addFavorite(item) {
     const favorites = this.getFavorites();
-    if (!favorites.find(f => f.id === item.id)) {
-      favorites.push(item);
+    const normalizedId = String(item.id);
+    if (!favorites.find(f => String(f.id) === normalizedId)) {
+      favorites.push({
+        ...item,
+        id: normalizedId,
+      });
       this.saveFavorites(favorites);
       return true;
     }
@@ -215,7 +219,8 @@ class StorageService {
    */
   removeFavorite(itemId) {
     const favorites = this.getFavorites();
-    const filtered = favorites.filter(f => f.id !== itemId);
+    const normalizedId = String(itemId);
+    const filtered = favorites.filter(f => String(f.id) !== normalizedId);
     if (filtered.length !== favorites.length) {
       this.saveFavorites(filtered);
       return true;
@@ -242,7 +247,8 @@ class StorageService {
    */
   addToHistory(item) {
     const history = this.getHistory();
-    const index = history.findIndex(h => h.id === item.id);
+    const normalizedId = String(item.id);
+    const index = history.findIndex(h => String(h.id) === normalizedId);
 
     if (index > -1) {
       history.splice(index, 1);
@@ -250,6 +256,7 @@ class StorageService {
 
     history.unshift({
       ...item,
+      id: normalizedId,
       watchedAt: new Date().toISOString(),
     });
 

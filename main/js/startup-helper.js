@@ -17,6 +17,19 @@ console.warn = function(...args) {
 
 // Wait for key objects before initializing
 document.addEventListener('DOMContentLoaded', () => {
+  if (window.location.protocol === 'file:') {
+    const msg = document.createElement('div');
+    msg.style.padding = '16px';
+    msg.style.background = '#fff3cd';
+    msg.style.color = '#7a5400';
+    msg.style.border = '1px solid #d9b24c';
+    msg.style.margin = '12px';
+    msg.style.borderRadius = '10px';
+    msg.style.whiteSpace = 'pre-wrap';
+    msg.textContent = 'Bu uygulamayi dogrudan file:// ile acmayin. HTTP sunucusu uzerinden acin. Ornek: http://127.0.0.1:8123/index.html';
+    document.body.prepend(msg);
+  }
+
   // Check for critical objects
   const critical = {
     CONFIG: typeof CONFIG !== 'undefined',
@@ -90,10 +103,6 @@ document.addEventListener('visibilitychange', (event) => {
   playerModule.handleVisibilityChange(document.hidden, true);
   event.stopImmediatePropagation();
 }, true);
-
-
-// Removed overriding feature patches to allow the new premium UI to take over.
-
 
 // Fallback error handler
 window.addEventListener('error', (event) => {

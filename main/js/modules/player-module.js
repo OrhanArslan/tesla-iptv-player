@@ -11,7 +11,17 @@ class PlayerModule {
     this.controlsTimeout = null;
     this.volume = 70;
     this.isMuted = false;
+    this.lastNonZeroVolume = 70;
     this._closing = false;
+    this._playbackToken = 0;
+    this._loadWatchdog = null;
+    this._audioProbeTimeout = null;
+    this._sourceCandidates = [];
+    this._sourceIndex = 0;
+    this._activeSource = null;
+    this.audioTracks = [];
+    this.currentAudioTrack = -1;
+    this._audioPanelOpen = false;
     this.subtitleTracks = [];
     this.currentSubtitle = -1;
     this._subtitlePanelOpen = false;
@@ -29,12 +39,14 @@ class PlayerModule {
     this.player.playsInline = true;
     this.player.preload = 'auto';
     this.player.crossOrigin = 'anonymous';
-    const saved = storageService.get('player_volume', 70);
-    this.volume = saved;
+    const saved = Number(storageService.get('player_volume', 70));
+    this.volume = Number.isFinite(saved) ? Math.max(0, Math.min(100, saved)) : 70;
+    this.isMuted = !!storageService.get('player_muted', false) || this.volume === 0;
+    this.lastNonZeroVolume = this.volume > 0 ? this.volume : 70;
     this._setupVideoEvents();
     this._setupControlEvents();
     this._setupMouseEvents();
-    this._setVolume(this.volume);
+    this._applyVolumeState();
     this._initialized = true;
   }
 
@@ -43,44 +55,38 @@ class PlayerModule {
   async playStream(stream) {
     if (!this.player) this.init();
     if (!this.player) return;
-    this._destroyPlayback(false);
+    const token = ++this._playbackToken;
+    this._destroyPlayback(true);
     this._closing = false;
     this.resumeAfterVisibilityLoss = false;
-    this.currentStream = this._normalizeStream(stream);
+    this.currentStream = await this._enrichStream(this._normalizeStream(stream));
+    if (token !== this._playbackToken) return;
 
     const streamId = this.currentStream.stream_id || this.currentStream.id;
     const type = (this.currentStream.type || 'live').toLowerCase();
-
-    let url;
-    if (type === 'live') {
-      url = apiService.getLiveStreamUrl(streamId);
-    } else if (type === 'movie' || type === 'movies' || type === 'vod') {
-      url = apiService.getVodStreamUrl(streamId, this.currentStream.container_extension || 'mp4');
-    } else if (type === 'series' || type === 'episode') {
-      url = apiService.getSeriesStreamUrl(streamId, this.currentStream.container_extension || 'mkv');
-    } else {
-      url = apiService.getLiveStreamUrl(streamId);
-    }
-
-    console.log(`▶️ Playing [${type}] "${stream.name}" → ${url}`);
 
     document.getElementById('player-modal').style.display = 'flex';
     document.getElementById('player-title').textContent = this.currentStream.name || this.currentStream.title || '...';
     const descEl = document.getElementById('player-description');
     if (descEl) descEl.textContent = this.currentStream.plot || this.currentStream.description || '';
 
-    // Reset subtitle state
     this._resetPlaybackUi();
+    this._applyVolumeState();
     this._pendingResumeTime = this._getResumeTime(streamId, type);
     this._lastPlaybackSaveSecond = -1;
 
     this._showBuffering(true);
-    this._loadStream(url, type);
     this._showControlsFor(CONFIG.UI.CONTROLS_AUTO_HIDE || 4000);
+    this._sourceCandidates = this._buildSourceCandidates(this.currentStream);
+    this._sourceIndex = 0;
+    if (!this._sourceCandidates.length) {
+      this._finalizePlaybackFailure(new Error('No playable source found'));
+      return;
+    }
+    this._loadNextSource(token);
 
-    // For VOD and episodes: fetch external subtitles from API in background
     if (type === 'movie' || type === 'movies' || type === 'vod' || type === 'episode') {
-      this._fetchExternalSubtitlesV2(streamId).catch(e => {
+      this._fetchExternalSubtitlesV2(streamId, token).catch(e => {
         console.warn('External subtitle fetch failed:', e.message);
       });
     }
@@ -98,40 +104,52 @@ class PlayerModule {
   closePlayer() {
     this._closing = true;
     this.resumeAfterVisibilityLoss = false;
+    this._pendingResumeTime = null;
+    clearTimeout(this._audioProbeTimeout);
+    this._clearLoadWatchdog();
+    this._hideAudioPanel();
+    this._hideSubtitlePanel();
     const modal = document.getElementById('player-modal');
     if (modal) modal.style.display = 'none';
     this._resetPlaybackUi();
 
-    this._destroyPlayback(true);
-
-    if (this.player) {
-      this.player.pause();
-      this.player.removeAttribute('src');
-      this.player.load(); // Resets, fires MEDIA_ERR_ABORTED — suppressed by _closing
+    if (document.pictureInPictureElement && document.exitPictureInPicture) {
+      document.exitPictureInPicture().catch(() => {});
+    }
+    if (document.fullscreenElement && document.exitFullscreen) {
+      document.exitFullscreen().catch(() => {});
     }
 
+    this._destroyPlayback(true);
     clearTimeout(this.controlsTimeout);
     this.currentStream = null;
     this.isPlaying = false;
+    this._activeSource = null;
+    this._sourceCandidates = [];
+    this._sourceIndex = 0;
     setTimeout(() => { this._closing = false; }, 200);
   }
 
   /* ── STREAM LOADING ─────────────────────────────────────── */
 
-  _loadStream(url, type) {
-    if (this.hls) { this.hls.destroy(); this.hls = null; }
+  _loadStream(url, type, token = this._playbackToken, candidate = null) {
+    this._detachHls();
     this._cleanupSubtitleResources();
+    this._clearLoadWatchdog();
+    this._activeSource = candidate || { url, type, container: this._normalizeContainer(this._inferContainerFromUrl(url)) };
+    this._startLoadWatchdog(token);
     const isM3u8 = /\.m3u8($|\?)/i.test(url) || type === 'live';
     if (isM3u8 && typeof Hls !== 'undefined' && Hls.isSupported()) {
-      this._loadHls(url);
+      this._loadHls(url, token);
     } else {
+      this._populateQuality([]);
       this.player.src = url;
       this.player.load();
-      this._autoPlay();
+      this._autoPlay(token);
     }
   }
 
-  _loadHls(url) {
+  _loadHls(url, token = this._playbackToken) {
     const cfg = Object.assign({
       enableWorker: true,
       startLevel: -1,
@@ -139,10 +157,13 @@ class PlayerModule {
       maxMaxBufferLength: 600,
     }, (CONFIG.PLAYER || {}).HLS_CONFIG || {});
 
+    const recovery = { network: 0, media: 0 };
     this.hls = new Hls(cfg);
 
     this.hls.on(Hls.Events.MANIFEST_PARSED, (_, data) => {
+      if (token !== this._playbackToken || this._closing) return;
       this._populateQuality(data.levels);
+      this._onAudioTracksUpdated(this.hls.audioTracks || []);
       // Check subtitle tracks right at manifest parse (catches case where
       // SUBTITLE_TRACKS_UPDATED fires before our listener is registered)
       const hlsSubs = this.hls.subtitleTracks || [];
@@ -150,31 +171,47 @@ class PlayerModule {
         console.log(`📝 Manifest: found ${hlsSubs.length} subtitle track(s)`);
         this._onSubtitleTracksUpdated(hlsSubs);
       }
-      this._autoPlay();
+      this._autoPlay(token);
+    });
+
+    this.hls.on(Hls.Events.AUDIO_TRACKS_UPDATED, (_, data) => {
+      if (token !== this._playbackToken || this._closing) return;
+      this._onAudioTracksUpdated(data.audioTracks || []);
+    });
+
+    this.hls.on(Hls.Events.AUDIO_TRACK_SWITCHED, (_, data) => {
+      if (token !== this._playbackToken || this._closing) return;
+      this.currentAudioTrack = typeof data.id === 'number' ? data.id : this.hls.audioTrack;
+      this._buildAudioPanel();
     });
 
     this.hls.on(Hls.Events.SUBTITLE_TRACKS_UPDATED, (_, data) => {
-      // Only process if we don't already have subtitle tracks
+      if (token !== this._playbackToken || this._closing) return;
       if (this.subtitleTracks.length === 0 && data.subtitleTracks?.length > 0) {
         this._onSubtitleTracksUpdated(data.subtitleTracks);
       }
     });
 
     this.hls.on(Hls.Events.FRAG_BUFFERED, () => {
-      this._showBuffering(false);
+      if (token !== this._playbackToken || this._closing) return;
+      this._handleSourceFailure(new Error(err.message || `Media error ${err.code}`), this._playbackToken);
     });
 
     this.hls.on(Hls.Events.ERROR, (_, data) => {
-      if (this._closing) return;
+      if (this._closing || token !== this._playbackToken) return;
       if (!data.fatal) return;
       
       
 
-      if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+      if (data.type === Hls.ErrorTypes.NETWORK_ERROR && recovery.network < 1) {
+        recovery.network += 1;
         this.hls.startLoad();
-      } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+      } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR && recovery.media < 1) {
+        recovery.media += 1;
         this.hls.recoverMediaError();
       } else {
+        this._handleSourceFailure(new Error(data.details || data.type || 'HLS error'), token);
+        return;
         UIModule.showToast('Yayın yüklenemedi', 'error');
         this._showBuffering(false);
       }
@@ -184,15 +221,98 @@ class PlayerModule {
     this.hls.attachMedia(this.player);
   }
 
-  async _autoPlay() {
+  async _autoPlay(token = this._playbackToken) {
+    if (token !== this._playbackToken || this._closing) return;
     try { await this.player.play(); }
     catch (e) { if (!this._closing) this._showControlsFor(0); }
+  }
+
+  _onAudioTracksUpdated(tracks) {
+    this.audioTracks = (tracks || []).map((track, index) => ({
+      label: this._audioLabel(track, index),
+      lang: (track.lang || track.language || '').toLowerCase(),
+      _index: index,
+      _native: false,
+    }));
+    this.currentAudioTrack = this.hls && this.hls.audioTrack >= 0 ? this.hls.audioTrack : (this.audioTracks.length ? 0 : -1);
+    this._updateAudioBtn(this.audioTracks.length > 0);
+    this._buildAudioPanel();
+  }
+
+  _syncNativeAudioTracks() {
+    if (this.hls || !this.player?.audioTracks) return;
+    const tracks = Array.from(this.player.audioTracks || []).map((track, index) => ({
+      label: this._audioLabel(track, index),
+      lang: (track.language || track.lang || '').toLowerCase(),
+      _index: index,
+      _native: true,
+    }));
+    if (!tracks.length) return;
+    this.audioTracks = tracks;
+    this.currentAudioTrack = tracks.findIndex((_, index) => this.player.audioTracks[index]?.enabled);
+    if (this.currentAudioTrack < 0) this.currentAudioTrack = 0;
+    this._updateAudioBtn(true);
+    this._buildAudioPanel();
+  }
+
+  _buildAudioPanel() {
+    const panel = document.getElementById('audio-panel');
+    if (!panel) return;
+    panel.innerHTML = '';
+    this.audioTracks.forEach((track, index) => {
+      const button = document.createElement('button');
+      button.className = 'subtitle-item' + (this.currentAudioTrack === index ? ' active' : '');
+      button.textContent = track.label;
+      button.onclick = () => this._selectAudioTrack(index);
+      panel.appendChild(button);
+    });
+  }
+
+  _selectAudioTrack(index) {
+    const track = this.audioTracks[index];
+    if (!track) return;
+    if (track._native && this.player?.audioTracks) {
+      Array.from(this.player.audioTracks).forEach((audioTrack, audioIndex) => {
+        audioTrack.enabled = audioIndex === index;
+      });
+    } else if (this.hls) {
+      this.hls.audioTrack = track._index;
+    }
+    this.currentAudioTrack = index;
+    this._buildAudioPanel();
+    this._hideAudioPanel();
+    UIModule.showToast(`${track.label} secildi`, 'info');
+  }
+
+  _updateAudioBtn(show) {
+    const btn = document.getElementById('audio-btn');
+    if (!btn) return;
+    btn.style.display = show ? 'flex' : 'none';
+    btn.classList.toggle('active', show && this.currentAudioTrack !== -1);
+  }
+
+  _toggleAudioPanel(e) {
+    if (e) e.stopPropagation();
+    const panel = document.getElementById('audio-panel');
+    if (!panel || !this.audioTracks.length) return;
+    this._audioPanelOpen = !this._audioPanelOpen;
+    panel.style.display = this._audioPanelOpen ? 'flex' : 'none';
+    if (this._audioPanelOpen) this._hideSubtitlePanel();
+  }
+
+  _hideAudioPanel() {
+    const panel = document.getElementById('audio-panel');
+    if (panel) panel.style.display = 'none';
+    this._audioPanelOpen = false;
   }
 
   /* ── SUBTITLE ───────────────────────────────────────────── */
 
   _onSubtitleTracksUpdated(tracks) {
-    if (!tracks || tracks.length === 0) return;
+    if (!tracks || tracks.length === 0) {
+      this._updateSubtitleBtn(false);
+      return;
+    }
     this.subtitleTracks = tracks.map((track, index) => ({
       label: track.name || track.label || this._langLabel(track.lang || track.language || `Track ${index + 1}`),
       lang: (track.lang || track.language || '').toLowerCase(),
@@ -446,7 +566,9 @@ class PlayerModule {
       if (this._closing) return;
       this.isPlaying = true;
       this._showBuffering(false);
+      this._clearLoadWatchdog();
       this._updatePlayBtn(true);
+      this._scheduleAudioHealthCheck(this._playbackToken);
     });
     this.player.addEventListener('pause', () => {
       if (this._closing) return;
@@ -461,11 +583,15 @@ class PlayerModule {
     this.player.addEventListener('canplay', () => {
       if (this._closing) return;
       this._showBuffering(false);
+      this._clearLoadWatchdog();
       this._resumePendingPlayback();
+      this._syncNativeAudioTracks();
     });
     this.player.addEventListener('loadedmetadata', () => {
       if (this._closing) return;
+      this._clearLoadWatchdog();
       this._resumePendingPlayback();
+      this._syncNativeAudioTracks();
     });
     this.player.addEventListener('timeupdate', () => {
       if (!this._closing) this._updateProgress();
@@ -484,8 +610,13 @@ class PlayerModule {
       // MEDIA_ERR_ABORTED (code 1) = intentional stop
       if (!err || err.code === 1) return;
       console.error('Video error:', err.code, err.message);
-      this._showBuffering(false);
+      this._handleSourceFailure(new Error(err.message || `Media error ${err.code}`), this._playbackToken);
       UIModule.showToast('Video hata: ' + (err.message || 'Yayın yüklenemedi'), 'error');
+    });
+
+    this.player.addEventListener('volumechange', () => {
+      this.isMuted = this.player.muted || this.player.volume === 0;
+      this._syncVolumeUi();
     });
 
     // Close subtitle panel on outside click
@@ -493,6 +624,9 @@ class PlayerModule {
       const panel = document.getElementById('subtitle-panel');
       const btn = document.getElementById('subtitle-btn');
       if (panel && !panel.contains(e.target) && e.target !== btn) this._hideSubtitlePanel();
+      const audioPanel = document.getElementById('audio-panel');
+      const audioBtn = document.getElementById('audio-btn');
+      if (audioPanel && !audioPanel.contains(e.target) && e.target !== audioBtn) this._hideAudioPanel();
     });
 
     // Fullscreen icon update
@@ -514,6 +648,7 @@ class PlayerModule {
     $('pip-btn')?.addEventListener('click', () => this.togglePiP());
     $('player-close')?.addEventListener('click', () => this.closePlayer());
     $('favorite-toggle')?.addEventListener('click', () => this._toggleFavorite());
+    $('audio-btn')?.addEventListener('click', e => this._toggleAudioPanel(e));
 
     $('volume-btn')?.addEventListener('click', () => {
       $('volume-slider')?.classList.toggle('show');
@@ -544,6 +679,7 @@ class PlayerModule {
         'k': () => this.togglePlayPause(),
         'f': () => this.toggleFullscreen(),
         'm': () => this.toggleMute(),
+        'a': () => this.audioTracks.length && this._toggleAudioPanel(),
         'c': () => this.subtitleTracks.length && this._toggleSubtitlePanel(),
         'ArrowRight': () => { if (this.player?.duration) this.player.currentTime = Math.min(this.player.currentTime + 10, this.player.duration); },
         'ArrowLeft':  () => { if (this.player?.duration) this.player.currentTime = Math.max(this.player.currentTime - 10, 0); },
@@ -567,6 +703,7 @@ class PlayerModule {
       if (!e.target.closest('.player-controls') &&
           !e.target.closest('.player-header') &&
           !e.target.closest('.player-info') &&
+          !e.target.closest('#audio-panel') &&
           !e.target.closest('#subtitle-panel')) {
         this.togglePlayPause();
       }
@@ -582,10 +719,15 @@ class PlayerModule {
 
   toggleMute() {
     if (!this.player) return;
-    this.isMuted = !this.isMuted;
-    this.player.muted = this.isMuted;
-    const vc = document.getElementById('volume-control');
-    if (vc) vc.value = this.isMuted ? 0 : this.volume;
+    if (this.isMuted || this.player.volume === 0) {
+      this.isMuted = false;
+      this._applyVolumeState(this.lastNonZeroVolume || 70);
+      return;
+    }
+    this.isMuted = true;
+    this.player.muted = true;
+    storageService.set('player_muted', true);
+    this._syncVolumeUi();
   }
 
   async togglePiP() {
@@ -641,11 +783,34 @@ class PlayerModule {
   /* ── HELPERS ────────────────────────────────────────────── */
 
   _setVolume(val) {
-    this.volume = Math.max(0, Math.min(100, val));
-    if (this.player) { this.player.volume = this.volume / 100; }
+    this.volume = Math.max(0, Math.min(100, Number(val) || 0));
+    if (this.volume > 0) this.lastNonZeroVolume = this.volume;
+    this.isMuted = this.volume === 0 ? true : false;
+    this._applyVolumeState();
+  }
+
+  _applyVolumeState(forceVolume = null) {
+    if (forceVolume !== null) {
+      this.volume = Math.max(0, Math.min(100, Number(forceVolume) || 0));
+      if (this.volume > 0) this.lastNonZeroVolume = this.volume;
+      this.isMuted = this.volume === 0 ? true : false;
+    }
+    if (this.player) {
+      this.player.volume = this.volume / 100;
+      this.player.muted = this.isMuted;
+    }
+    storageService.set('player_volume', this.volume);
+    storageService.set('player_muted', this.isMuted);
+    this._syncVolumeUi();
+  }
+
+  _syncVolumeUi() {
     const vc = document.getElementById('volume-control');
     if (vc) vc.value = this.volume;
-    storageService.set('player_volume', this.volume);
+    const btn = document.getElementById('volume-btn');
+    if (!btn) return;
+    btn.classList.toggle('active', !this.isMuted && this.volume > 0);
+    btn.title = this.isMuted || this.volume === 0 ? 'Sesi ac (M)' : 'Sesi kapat (M)';
   }
 
   _populateQuality(levels) {
@@ -701,6 +866,7 @@ class PlayerModule {
     if (hideAfterMs > 0 && this.isPlaying) {
       this.controlsTimeout = setTimeout(() => {
         els.forEach(el => el?.classList.add('hidden'));
+        this._hideAudioPanel();
         this._hideSubtitlePanel();
       }, hideAfterMs);
     }
@@ -738,15 +904,22 @@ class PlayerModule {
     if (normalized.type === 'movies') normalized.type = 'movie';
     if (normalized.type === 'series') normalized.type = normalized.isEpisode ? 'episode' : 'series';
     normalized.name = normalized.name || normalized.title || 'Unknown';
-    normalized.icon = normalized.icon || normalized.stream_icon || normalized.cover || '';
+    normalized.icon = normalized.icon || normalized.stream_icon || normalized.cover || normalized.cover_big || '';
+    normalized.plot = normalized.plot || normalized.description || normalized.info?.plot || '';
     normalized.description = normalized.description || normalized.plot || '';
+    normalized.container_extension = this._normalizeContainer(normalized.container_extension || normalized.info?.container_extension || '');
+    normalized.direct_source = normalized.direct_source || normalized.info?.direct_source || '';
     return normalized;
   }
 
   _resetPlaybackUi() {
     this._showBuffering(false);
+    this._hideAudioPanel();
     this._hideSubtitlePanel();
     this._cleanupSubtitleResources();
+    this.audioTracks = [];
+    this.currentAudioTrack = -1;
+    this._updateAudioBtn(false);
     this.subtitleTracks = [];
     this.currentSubtitle = -1;
     this._updateSubtitleBtn(false);
@@ -762,14 +935,11 @@ class PlayerModule {
   }
 
   _destroyPlayback(resetMedia = true) {
-    if (this.hls) {
-      try {
-        this.hls.destroy();
-      } catch (error) {
-        console.warn('HLS destroy failed:', error?.message || error);
-      }
-      this.hls = null;
-    }
+    this._clearLoadWatchdog();
+    clearTimeout(this._audioProbeTimeout);
+    this._cleanupSubtitleResources();
+
+    this._detachHls();
 
     if (resetMedia && this.player) {
       try {
@@ -786,10 +956,232 @@ class PlayerModule {
     }
   }
 
+  _detachHls() {
+    if (!this.hls) return;
+    try {
+      this.hls.destroy();
+    } catch (error) {
+      console.warn('HLS destroy failed:', error?.message || error);
+    }
+    this.hls = null;
+  }
+
   _cleanupSubtitleResources() {
     Array.from(this.player?.querySelectorAll('track') || []).forEach(track => track.remove());
     this._subtitleObjectUrls.forEach(url => URL.revokeObjectURL(url));
     this._subtitleObjectUrls = [];
+  }
+
+  async _enrichStream(stream) {
+    const enriched = { ...stream };
+    if (['movie', 'vod'].includes(enriched.type)) {
+      const info = enriched._vodInfo || await apiService.getVodInfo(enriched.stream_id || enriched.id);
+      if (info) {
+        const movieInfo = info.info || {};
+        const movieData = info.movie_data || {};
+        enriched._vodInfo = info;
+        enriched.plot = enriched.plot || movieInfo.plot || movieData.plot || '';
+        enriched.description = enriched.description || enriched.plot;
+        enriched.icon = enriched.icon || movieInfo.movie_image || movieData.stream_icon || '';
+        enriched.container_extension = this._normalizeContainer(
+          enriched.container_extension || movieData.container_extension || movieInfo.container_extension || 'mp4'
+        );
+        enriched.direct_source = this._resolvePlaybackUrl(
+          enriched.direct_source || movieData.direct_source || movieInfo.direct_source || ''
+        );
+      }
+    }
+    if (enriched.type === 'episode') {
+      enriched.plot = enriched.plot || enriched.info?.plot || '';
+      enriched.description = enriched.description || enriched.plot;
+      enriched.icon = enriched.icon || enriched.info?.movie_image || '';
+      enriched.container_extension = this._normalizeContainer(enriched.container_extension || enriched.info?.container_extension || 'mp4');
+      enriched.direct_source = this._resolvePlaybackUrl(enriched.direct_source || enriched.info?.direct_source || '');
+    }
+    return enriched;
+  }
+
+  _buildSourceCandidates(stream) {
+    const streamId = stream.stream_id || stream.id;
+    const type = stream.type;
+    const candidates = [];
+    const seen = new Set();
+    const deferredRisky = [];
+    const push = (url, label, container = '', kind = '') => {
+      if (!url || seen.has(url)) return;
+      seen.add(url);
+      candidates.push({
+        url,
+        label,
+        container: this._normalizeContainer(container || this._inferContainerFromUrl(url)),
+        kind: kind || this._detectSourceKind(url, container, type),
+      });
+    };
+
+    if (type === 'live') {
+      push(apiService.getLiveStreamUrl(streamId), 'live-hls', 'm3u8', 'hls');
+      return candidates;
+    }
+
+    const directSource = this._resolvePlaybackUrl(stream.direct_source);
+    if (directSource) {
+      const directContainer = this._normalizeContainer(this._inferContainerFromUrl(directSource));
+      if (this._isRiskyContainer(directContainer)) {
+        deferredRisky.push({
+          url: directSource,
+          label: 'direct-risky',
+          container: directContainer,
+          kind: this._detectSourceKind(directSource, directContainer, type),
+        });
+      } else {
+        push(directSource, 'direct', directContainer);
+      }
+    }
+
+    const preferred = [];
+    const ext = this._normalizeContainer(stream.container_extension || '');
+    const addExt = (value) => {
+      const clean = this._normalizeContainer(value);
+      if (!clean || preferred.includes(clean)) return;
+      preferred.push(clean);
+    };
+
+    if (!ext || this._isRiskyContainer(ext)) {
+      addExt('mp4');
+      addExt('m4v');
+    } else {
+      addExt(ext);
+      if (ext !== 'mp4') addExt('mp4');
+    }
+
+    preferred.forEach((candidateExt) => {
+      const url = ['movie', 'vod'].includes(type)
+        ? apiService.getVodStreamUrl(streamId, candidateExt)
+        : apiService.getSeriesStreamUrl(streamId, candidateExt);
+      push(url, `${type}-${candidateExt}`, candidateExt);
+    });
+
+    if (!candidates.length && deferredRisky.length) {
+      deferredRisky.forEach((candidate) => {
+        push(candidate.url, candidate.label, candidate.container, candidate.kind);
+      });
+    }
+
+    return candidates;
+  }
+
+  _detectSourceKind(url, container, type) {
+    return /\.m3u8($|\?)/i.test(url) || this._normalizeContainer(container) === 'm3u8' || type === 'live' ? 'hls' : 'native';
+  }
+
+  _loadNextSource(token) {
+    if (token !== this._playbackToken || this._closing) return;
+    const candidate = this._sourceCandidates[this._sourceIndex];
+    if (!candidate) {
+      this._finalizePlaybackFailure(new Error('All playback sources failed'));
+      return;
+    }
+    this._sourceIndex += 1;
+    this._loadStream(candidate.url, this.currentStream?.type || 'live', token, candidate);
+  }
+
+  _handleSourceFailure(error, token = this._playbackToken) {
+    if (token !== this._playbackToken || this._closing) return;
+    this._clearLoadWatchdog();
+    if (this._sourceIndex < this._sourceCandidates.length) {
+      UIModule.showToast('Alternatif kaynak deneniyor...', 'info');
+      this._destroyPlayback(false);
+      this._loadNextSource(token);
+      return;
+    }
+    this._finalizePlaybackFailure(error);
+  }
+
+  _finalizePlaybackFailure(error) {
+    this._showBuffering(false);
+    console.error('Playback failed:', error?.message || error);
+    UIModule.showToast(this._playbackErrorMessage(error), 'error');
+  }
+
+  _playbackErrorMessage(error) {
+    const message = String(error?.message || '').toLowerCase();
+    if (message.includes('mkv')) {
+      return 'Saglayici bu icerik icin tarayici uyumlu kaynak vermiyor. MKV/ses codec uyumsuz.';
+    }
+    if (message.includes('audio') || message.includes('codec')) {
+      return 'Ses codec uyumsuzlugu nedeniyle oynatma basarisiz oldu.';
+    }
+    if (message.includes('timeout')) {
+      return 'Yayin zaman asimina ugradi.';
+    }
+    return 'Yayin yuklenemedi.';
+  }
+
+  _startLoadWatchdog(token) {
+    this._clearLoadWatchdog();
+    this._loadWatchdog = setTimeout(() => {
+      if (token !== this._playbackToken || this._closing) return;
+      if (!this.isPlaying && (this.player?.readyState || 0) < 2) {
+        this._handleSourceFailure(new Error('Playback load timeout'), token);
+      }
+    }, CONFIG.TIMEOUT.STREAM_CONNECT || 15000);
+  }
+
+  _clearLoadWatchdog() {
+    clearTimeout(this._loadWatchdog);
+    this._loadWatchdog = null;
+  }
+
+  _scheduleAudioHealthCheck(token) {
+    clearTimeout(this._audioProbeTimeout);
+    this._audioProbeTimeout = setTimeout(() => {
+      if (token !== this._playbackToken || this._closing || !this._activeSource) return;
+      if (this._activeSource.kind !== 'native' || !this._isRiskyContainer(this._activeSource.container)) return;
+      if (this.isMuted || this.volume === 0 || this.player.paused) return;
+      const decoded = Number(this.player.webkitAudioDecodedByteCount || 0);
+      const nativeCount = this.player?.audioTracks?.length || 0;
+      if (decoded > 0 || nativeCount > 0) return;
+      this._handleSourceFailure(new Error(`Unsupported audio codec in ${this._activeSource.container}`), token);
+    }, 3500);
+  }
+
+  _normalizeContainer(container) {
+    return String(container || '').toLowerCase().replace(/^\./, '').trim();
+  }
+
+  _inferContainerFromUrl(url) {
+    const clean = String(url || '').split('?')[0];
+    const match = clean.match(/\.([a-z0-9]+)$/i);
+    return match ? match[1].toLowerCase() : '';
+  }
+
+  _resolvePlaybackUrl(rawUrl) {
+    const value = String(rawUrl || '').trim();
+    if (!value) return '';
+    if (/^file:/i.test(value)) return '';
+    if (/^[a-zA-Z]:[\\/]/.test(value)) return '';
+    if (/^https?:\/\//i.test(value)) return value;
+    if (/^\/\//.test(value)) {
+      const protocol = apiService?.serverUrl?.startsWith('https://') ? 'https:' : 'http:';
+      return `${protocol}${value}`;
+    }
+    try {
+      return new URL(value.replace(/^[.][/\\]+/, ''), `${apiService.serverUrl}/`).toString();
+    } catch {
+      return '';
+    }
+  }
+
+  _isRiskyContainer(container) {
+    return ['mkv', 'avi', 'ts', 'm2ts', 'mpeg', 'mpg', 'flv', 'wmv'].includes(this._normalizeContainer(container));
+  }
+
+  _audioLabel(track, index) {
+    const lang = (track.lang || track.language || '').toLowerCase();
+    const name = track.name || track.label || track.title || '';
+    if (name && lang) return `${name} (${lang.toUpperCase()})`;
+    if (name) return name;
+    return lang ? `${this._langLabel(lang)} Audio` : `Ses ${index + 1}`;
   }
 
   _getResumeTime(streamId, type) {
@@ -817,11 +1209,14 @@ class PlayerModule {
     }
   }
 
-  async _fetchExternalSubtitlesV2(streamId) {
+  async _fetchExternalSubtitlesV2(streamId, token = this._playbackToken) {
     await new Promise(resolve => setTimeout(resolve, 1200));
-    if (this._closing || this.subtitleTracks.length > 0) return;
+    if (this._closing || token !== this._playbackToken || this.subtitleTracks.length > 0) return;
 
-    const info = await apiService.getVodInfo(streamId);
+    const info =
+      this.currentStream?._vodInfo ||
+      (this.currentStream?.info ? { info: this.currentStream.info, movie_data: this.currentStream } : null) ||
+      (['movie', 'movies', 'vod'].includes(this.currentStream?.type || '') ? await apiService.getVodInfo(streamId) : null);
     if (!info || this._closing) return;
 
     const plot = info?.info?.plot || info?.movie_data?.plot || '';
@@ -854,7 +1249,7 @@ class PlayerModule {
       }
     }
 
-    if (!tracks.length) return;
+    if (!tracks.length || token !== this._playbackToken) return;
 
     this._cleanupSubtitleResources();
     this._subtitleObjectUrls = nextObjectUrls;
@@ -868,7 +1263,7 @@ class PlayerModule {
     });
 
     setTimeout(() => {
-      if (this._closing) return;
+      if (this._closing || token !== this._playbackToken) return;
       this.subtitleTracks = tracks;
       this._updateSubtitleBtn(true);
       this._buildSubtitlePanel();
