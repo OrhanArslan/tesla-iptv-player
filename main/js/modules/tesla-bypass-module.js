@@ -141,6 +141,10 @@ class TeslaBypassModule {
     const parent = videoEl.parentElement;
     if (!parent) return;
 
+    // The core of the bypass: Hide the real video so Tesla doesn't flag it as full-screen video playback.
+    // We make it 1x1 pixel. Canvas drawImage uses internal resolution (videoWidth/videoHeight), so quality is preserved.
+    videoEl.style.cssText = 'position: absolute; top: 0; left: 0; width: 1px; height: 1px; opacity: 0.01; pointer-events: none; z-index: -1;';
+    
     // Create canvas
     const canvas = document.createElement('canvas');
     canvas.id = 'bypass-canvas';
@@ -159,10 +163,8 @@ class TeslaBypassModule {
     this._canvas = canvas;
     this._ctx = canvas.getContext('2d', { willReadFrequently: true });
 
-    // Hide the real video visually — but it still plays (audio works)
-    videoEl.style.opacity = '0';
-    videoEl.style.position = 'absolute';
-    videoEl.style.pointerEvents = 'none';
+    // Hide the real video visually by making it tiny and fully transparent, but keeping it in DOM
+    videoEl.style.cssText = 'position: absolute; top: 0; left: 0; width: 1px; height: 1px; opacity: 0.01; pointer-events: none; z-index: -1;';
 
     // Sync canvas size
     this._syncCanvasSize();
@@ -202,9 +204,7 @@ class TeslaBypassModule {
 
     // Restore video visibility
     if (this._videoEl) {
-      this._videoEl.style.opacity = '';
-      this._videoEl.style.position = '';
-      this._videoEl.style.pointerEvents = '';
+      this._videoEl.style.cssText = '';
       this._videoEl = null;
     }
   }
@@ -225,7 +225,7 @@ class TeslaBypassModule {
   }
 
   /**
-   * Core render loop — draws video frames to canvas.
+   * Core render loop - draws video frames to canvas.
    */
   _startRenderLoop() {
     const draw = () => {
@@ -236,9 +236,20 @@ class TeslaBypassModule {
       const canvas = this._canvas;
 
       // Only draw if video has data
-      if (video.readyState >= 2) {
+      if (video.readyState >= 2 && video.videoWidth && video.videoHeight) {
         try {
-          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+          ctx.fillStyle = '#000';
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          
+          // Calculate Aspect Ratio to preserve letterboxing
+          const hRatio = canvas.width / video.videoWidth;
+          const vRatio = canvas.height / video.videoHeight;
+          const ratio  = Math.min(hRatio, vRatio);
+          const centerShift_x = (canvas.width - video.videoWidth * ratio) / 2;
+          const centerShift_y = (canvas.height - video.videoHeight * ratio) / 2;  
+
+          ctx.drawImage(video, 0, 0, video.videoWidth, video.videoHeight,
+                        centerShift_x, centerShift_y, video.videoWidth * ratio, video.videoHeight * ratio);
         } catch (e) {
           // Silently ignore cross-origin or other draw errors
         }
