@@ -105,6 +105,10 @@ class PlayerModule {
     this._closing = true;
     this.resumeAfterVisibilityLoss = false;
     this._pendingResumeTime = null;
+    // Detach bypass canvas before destroying playback
+    if (typeof bypassModule !== 'undefined') {
+      bypassModule.detachCanvas();
+    }
     clearTimeout(this._audioProbeTimeout);
     this._clearLoadWatchdog();
     this._hideAudioPanel();
@@ -285,12 +289,7 @@ class PlayerModule {
   _updateAudioBtn(show) {
     const btn = document.getElementById('audio-btn');
     if (!btn) return;
-    btn.style.display = 'flex'; // ALWAYS show CC button for UX
-    if (!show && this.subtitleTracks.length === 0) {
-      btn.style.opacity = '0.5';
-    } else {
-      btn.style.opacity = '1';
-    }
+    btn.style.display = show ? 'flex' : 'none';
     btn.classList.toggle('active', show && this.currentAudioTrack !== -1);
   }
 
@@ -513,7 +512,14 @@ class PlayerModule {
       }
     } else if (isNative || !this.hls || this.hls.subtitleTracks.length === 0) {
       // Use native TextTrack API
-      Array.from(this.player.textTracks || []).forEach(t => { t.mode = 'hidden'; }); if (track?._domTrack && track._domTrack.track) { track._domTrack.track.mode = 'showing'; } else if (this.player.textTracks[idx]) { this.player.textTracks[idx].mode = 'showing'; }
+      Array.from(this.player.textTracks || []).forEach(t => {
+        t.mode = 'hidden';
+      });
+      if (track?._domTrack && track._domTrack.track) {
+        track._domTrack.track.mode = 'showing';
+      } else if (this.player.textTracks[idx]) {
+        this.player.textTracks[idx].mode = 'showing';
+      }
     } else {
       // Use HLS.js internal tracks
       this.hls.subtitleTrack = typeof track?._index === 'number' ? track._index : idx;
@@ -553,7 +559,7 @@ class PlayerModule {
   _toggleSubtitlePanel(e) {
     if (e) e.stopPropagation();
     if (this.subtitleTracks.length === 0) {
-      UIModule.showToast('Bu i?erikte (IPTV sunucusunda) altyaz? bulunamad?', 'warning');
+      UIModule.showToast('Bu içerikte altyazı bulunamadı', 'warning');
       return;
     }
     const panel = document.getElementById('subtitle-panel');
@@ -578,6 +584,10 @@ class PlayerModule {
       this._clearLoadWatchdog();
       this._updatePlayBtn(true);
       this._scheduleAudioHealthCheck(this._playbackToken);
+      // Attach bypass canvas if bypass is running
+      if (typeof bypassModule !== 'undefined' && bypassModule.isRunning && !bypassModule._canvas) {
+        bypassModule.attachCanvas(this.player);
+      }
     });
     this.player.addEventListener('pause', () => {
       if (this._closing) return;
@@ -1055,9 +1065,9 @@ class PlayerModule {
       preferred.push(clean);
     };
 
-    addExt('m3u8'); // 1. HLS FIRST: Forces Xtream server to extract embedded MKV subtitles
-    if (ext && ext !== 'm3u8') addExt(ext); // 2. Fallback to native (fast but no embedded subs)
-    if (ext !== 'mp4') addExt('mp4');       // 3. Fallback to mp4
+    addExt(ext);                                    // 1. Orijinal format (mkv, mp4, avi vb.)
+    if (ext !== 'mp4') addExt('mp4');               // 2. Fallback mp4
+    addExt('m3u8');                                  // 3. Son çare: HLS transcode
 
     preferred.forEach((candidateExt) => {
       const url = ['movie', 'vod'].includes(type)
@@ -1226,11 +1236,42 @@ class PlayerModule {
 
     const plot = info?.info?.plot || info?.movie_data?.plot || '';
     if (plot) {
-      const descEl = document.getElementById('player-description');
+    const descEl = document.getElementById('player-description');
       if (descEl && !descEl.textContent) descEl.textContent = plot;
     }
 
-    const parsedSubs = this._parseSubtitlesFromVodInfo(info, streamId); if (!parsedSubs.length) { parsedSubs.push({ lang: 'tr', label: 'T?rk?e', url: this._buildSubtitleUrl(streamId, 'tr') }, { lang: 'en', label: 'English', url: this._buildSubtitleUrl(streamId, 'en') }, { lang: 'de', label: 'Deutsch', url: this._buildSubtitleUrl(streamId, 'de') }); }
+    let parsedSubs = this._parseSubtitlesFromVodInfo(info, streamId);
+    
+    // --- JS MKV DEMUXER EXPERIMENT ---
+    // If the active source is MKV and we have the MkvSubtitleExtractor available, let's probe it
+    if (this._activeSource && this._activeSource.url && this._activeSource.url.includes('.mkv') && typeof MkvSubtitleExtractor !== 'undefined') {
+      try {
+        const extractor = new MkvSubtitleExtractor();
+        const mkvTracks = await extractor.probe(this._activeSource.url);
+        if (mkvTracks && mkvTracks.length > 0) {
+          mkvTracks.forEach(t => {
+            parsedSubs.push({
+              lang: t.language || 'und',
+              label: t.name || `MKV Track ${t.trackNumber} (${t.codec})`,
+              url: null, // We don't have full extraction yet, just listing for now
+              _mkvTrackNumber: t.trackNumber
+            });
+          });
+        }
+      } catch (err) {
+        console.warn('MKV Demuxer probe failed:', err);
+      }
+    }
+    // ---------------------------------
+
+    if (!parsedSubs.length) {
+      // API'de altyazı tanımlı değil — standart Xtream yollarını dene
+      parsedSubs = [
+        { lang: 'tr', label: 'Türkçe', url: this._buildSubtitleUrl(streamId, 'tr') },
+        { lang: 'en', label: 'English', url: this._buildSubtitleUrl(streamId, 'en') },
+        { lang: 'de', label: 'Deutsch', url: this._buildSubtitleUrl(streamId, 'de') },
+      ];
+    }
 
     const tracks = [];
     const nextObjectUrls = [];

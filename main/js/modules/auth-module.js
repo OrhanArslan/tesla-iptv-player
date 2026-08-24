@@ -281,6 +281,17 @@ class AuthModule {
     epgModule.init();
     settingsModule.init();
     UIModule.init();
+    
+    // Start Bypass if enabled
+    if (typeof bypassModule !== 'undefined') {
+      bypassModule.init();
+      if (bypassModule.settings.enabled) {
+        bypassModule.start();
+        if (typeof settingsModule !== 'undefined' && typeof settingsModule._updateBypassDot === 'function') {
+          settingsModule._updateBypassDot();
+        }
+      }
+    }
   }
 
   /**

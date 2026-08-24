@@ -1,98 +1,102 @@
 /**
- * Tesla Bypass Module
- * Tesla araç tarayıcısında hareket halindeyken video oynatma kısıtlamalarını aşar.
+ * Tesla Bypass Module — Canvas Rendering
  * 
- * Özellikler:
- * - Motion sensör sahte değerleri (ivmeölçer, jiroskop)
- * - Geolocation spoofing (sabit konum, hız=0)
- * - Video pause yakalama ve otomatik devam
- * - HTMLVideoElement.prototype override
- * - MutationObserver ile yeni video elementleri izleme
- * - Network bağlantı bilgisi sahte değerleri
+ * Tesla aracın D/R vitesinde <video> elementinin görüntüsünü motor
+ * seviyesinde donduruyor. Bu modül videoyu gizli tutup her frame'i
+ * bir <canvas> elementine çizerek bu engeli aşar.
+ *
+ * Ayrıca:
+ * - pause() override (Tesla bazen pause çağırır)
+ * - visibilitychange guard
+ * - auto-resume
  */
 
 class TeslaBypassModule {
   constructor() {
     this.isRunning = false;
     this.settings = {};
+
+    // Canvas state
+    this._canvas = null;
+    this._ctx = null;
+    this._rafId = null;
+    this._videoEl = null;
+    this._resizeObserver = null;
+
+    // Pause override
+    this._originalPause = null;
+    this._pauseListeners = new Map();
+    this.trackedVideos = new Set();
     this.monitorInterval = null;
     this.videoObserver = null;
-    this.trackedVideos = new Set();
-    this._originalPause = null;
-    this._originalPlay = null;
-    this._originalGetCurrentPosition = null;
-    this._originalWatchPosition = null;
-    this._pauseListeners = new Map();
   }
 
-  /**
-   * Initialize the bypass module with settings
-   */
+  // ─── INIT & SETTINGS ────────────────────────────────────────
+
   init() {
     this.loadSettings();
-    console.log('🛡️ TeslaBypassModule initialized');
+    console.log('[TeslaBypass] Initialized');
   }
 
-  /**
-   * Load bypass settings from config and storage
-   */
   loadSettings() {
-    const saved = storageService?.get('tesla_bypass_settings') || {};
+    const saved = (typeof storageService !== 'undefined' && storageService?.get('tesla_bypass_settings')) || {};
     this.settings = {
-      enabled:       CONFIG.BYPASS?.ENABLED       ?? true,
-      mockSpeed:     CONFIG.BYPASS?.MOCK_SPEED     ?? true,
-      mockGear:      CONFIG.BYPASS?.MOCK_GEAR      ?? true,
-      autoResume:    CONFIG.BYPASS?.AUTO_RESUME     ?? true,
-      preventPause:  CONFIG.BYPASS?.PREVENT_PAUSE   ?? true,
-      fakeLocation:  CONFIG.BYPASS?.FAKE_LOCATION   ?? { lat: 41.0082, lng: 28.9784 },
+      enabled:      CONFIG?.BYPASS?.ENABLED      ?? true,
+      autoResume:   CONFIG?.BYPASS?.AUTO_RESUME   ?? true,
+      preventPause: CONFIG?.BYPASS?.PREVENT_PAUSE ?? true,
       ...saved,
     };
   }
 
-  /**
-   * Save current settings to storage
-   */
   saveSettings() {
-    storageService?.set('tesla_bypass_settings', this.settings);
+    if (typeof storageService !== 'undefined') {
+      storageService.set('tesla_bypass_settings', this.settings);
+    }
   }
 
-  /**
-   * Start all bypass systems
-   */
+  // ─── START / STOP / TOGGLE ──────────────────────────────────
+
   start() {
     if (this.isRunning) return;
     this.isRunning = true;
 
-    this._log('Bypass sistemi başlatılıyor...', 'info');
-
-    if (this.settings.mockSpeed) {
-      this._hijackMotionSensor();
-    }
-    if (this.settings.mockGear) {
-      this._hijackGearStatus();
-    }
-    this._hijackGeolocation();
-    this._hijackNetworkConnection();
-
+    // Pause override
     if (this.settings.preventPause) {
       this._overrideVideoPause();
     }
+
+    // Visibility guard
+    this._installVisibilityGuard();
+
+    // Auto-resume monitoring
     if (this.settings.autoResume) {
       this._startVideoMonitoring();
     }
 
+    // Watch for new <video> elements
     this._observeNewVideos();
-    this._updateStatusUI();
 
-    this._log('✅ Bypass sistemi aktif!', 'success');
+    // If player already has a video, attach canvas now
+    const existingVideo = document.getElementById('video-player');
+    if (existingVideo) {
+      this.attachCanvas(existingVideo);
+    }
+
+    this._updateStatusUI();
+    console.log('[TeslaBypass] ✅ Bypass aktif (Canvas Rendering)');
   }
 
-  /**
-   * Stop all bypass systems
-   */
   stop() {
     if (!this.isRunning) return;
     this.isRunning = false;
+
+    this.detachCanvas();
+
+    // Restore pause
+    if (this._originalPause) {
+      HTMLVideoElement.prototype.pause = this._originalPause;
+      this._originalPause = null;
+    }
 
     // Stop monitoring
     if (this.monitorInterval) {
@@ -106,23 +110,7 @@ class TeslaBypassModule {
       this.videoObserver = null;
     }
 
-    // Restore original pause
-    if (this._originalPause) {
-      HTMLVideoElement.prototype.pause = this._originalPause;
-      this._originalPause = null;
-    }
-
-    // Restore geolocation
-    if (this._originalGetCurrentPosition) {
-      navigator.geolocation.getCurrentPosition = this._originalGetCurrentPosition;
-      this._originalGetCurrentPosition = null;
-    }
-    if (this._originalWatchPosition) {
-      navigator.geolocation.watchPosition = this._originalWatchPosition;
-      this._originalWatchPosition = null;
-    }
-
-    // Remove pause listeners from tracked videos
+    // Remove pause listeners
     this._pauseListeners.forEach((listener, video) => {
       video.removeEventListener('pause', listener);
     });
@@ -130,208 +118,155 @@ class TeslaBypassModule {
     this.trackedVideos.clear();
 
     this._updateStatusUI();
-    this._log('⏹️ Bypass sistemi durduruldu', 'warning');
+    console.log('[TeslaBypass] ⏹ Bypass durduruldu');
   }
 
-  /**
-   * Toggle bypass on/off
-   */
   toggle() {
-    if (this.isRunning) {
-      this.stop();
-    } else {
-      this.start();
-    }
+    if (this.isRunning) this.stop();
+    else this.start();
     return this.isRunning;
   }
 
+  // ─── CANVAS RENDERING (CORE) ───────────────────────────────
+
   /**
-   * Get current bypass status
+   * Attach a canvas overlay on top of a <video> element.
+   * The video is made visually invisible but keeps playing (audio continues).
+   * Each frame is drawn to the canvas via requestAnimationFrame.
    */
-  getStatus() {
-    return {
-      running: this.isRunning,
-      mockedSpeed: this.settings.mockSpeed ? '0 km/h' : 'Devre dışı',
-      mockedGear: this.settings.mockGear ? 'PARK' : 'Devre dışı',
-      autoResume: this.settings.autoResume,
-      preventPause: this.settings.preventPause,
-      trackedVideos: this.trackedVideos.size,
-    };
-  }
+  attachCanvas(videoEl) {
+    if (!videoEl || this._canvas) return;
+    this._videoEl = videoEl;
 
-  // ═══════════════════════════════════════════════════════════════
-  // MOTION & SENSOR HIJACKING
-  // ═══════════════════════════════════════════════════════════════
+    const parent = videoEl.parentElement;
+    if (!parent) return;
 
-  _hijackMotionSensor() {
-    const zeroMotion = {
-      acceleration: { x: 0, y: 0, z: 0 },
-      accelerationIncludingGravity: { x: 0, y: 0, z: 9.81 },
-      rotationRate: { alpha: 0, beta: 0, gamma: 0 },
-      interval: 16,
-    };
+    // Create canvas
+    const canvas = document.createElement('canvas');
+    canvas.id = 'bypass-canvas';
+    canvas.style.cssText =
+      'position:absolute;top:0;left:0;width:100%;height:100%;' +
+      'z-index:2;pointer-events:none;background:#000;' +
+      'border: 2px solid rgba(255, 0, 0, 0.5); box-sizing: border-box;';
 
-    // Override navigator.motion
-    try {
-      Object.defineProperty(window.navigator, 'motion', {
-        get: () => zeroMotion,
-        configurable: true,
-      });
-    } catch (e) { /* property may not be configurable */ }
-
-    // Override navigator.deviceMotion
-    try {
-      Object.defineProperty(window.navigator, 'deviceMotion', {
-        get: () => zeroMotion,
-        configurable: true,
-      });
-    } catch (e) { /* property may not be configurable */ }
-
-    // Intercept DeviceMotionEvent
-    const originalAddEventListener = EventTarget.prototype.addEventListener;
-    const self = this;
-    window.addEventListener('devicemotion', function(e) {
-      if (!self.isRunning) return;
-      e.stopImmediatePropagation();
-    }, true);
-
-    // Override window.speed
-    try {
-      Object.defineProperty(window, 'speed', {
-        get: () => 0,
-        configurable: true,
-      });
-    } catch (e) { /* property may not be configurable */ }
-
-    this._log('Motion sensör hijack edildi (hız=0)', 'success');
-  }
-
-  _hijackGearStatus() {
-    // Override window.gear
-    try {
-      Object.defineProperty(window, 'gear', {
-        get: () => 'PARK',
-        configurable: true,
-      });
-    } catch (e) { /* property may not be configurable */ }
-
-    // Override Tesla-specific APIs if they exist
-    if (window.Tesla) {
-      if (window.Tesla.isVehicleMoving) {
-        window.Tesla.isVehicleMoving = () => false;
-      }
-      if (window.Tesla.checkSpeed) {
-        window.Tesla.checkSpeed = () => 0;
-      }
-      if (window.Tesla.getGearPosition) {
-        window.Tesla.getGearPosition = () => 'P';
-      }
-      if (window.Tesla.isDriving) {
-        window.Tesla.isDriving = () => false;
-      }
+    // Make sure parent is positioned
+    const parentPos = getComputedStyle(parent).position;
+    if (parentPos === 'static') {
+      parent.style.position = 'relative';
     }
 
-    this._log('Vites durumu PARK olarak sabitlendi', 'success');
+    parent.appendChild(canvas);
+    this._canvas = canvas;
+    this._ctx = canvas.getContext('2d', { willReadFrequently: true });
+
+    // Hide the real video visually — but it still plays (audio works)
+    videoEl.style.opacity = '0';
+    videoEl.style.position = 'absolute';
+    videoEl.style.pointerEvents = 'none';
+
+    // Sync canvas size
+    this._syncCanvasSize();
+
+    // Watch for resize
+    this._resizeObserver = new ResizeObserver(() => this._syncCanvasSize());
+    this._resizeObserver.observe(parent);
+
+    // Start render loop
+    this._startRenderLoop();
+
+    console.log('[TeslaBypass] Canvas attached to video');
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // GEOLOCATION HIJACKING
-  // ═══════════════════════════════════════════════════════════════
+  /**
+   * Remove canvas overlay, restore video visibility.
+   */
+  detachCanvas() {
+    // Stop render loop
+    if (this._rafId) {
+      cancelAnimationFrame(this._rafId);
+      this._rafId = null;
+    }
 
-  _hijackGeolocation() {
-    const fakePosition = {
-      coords: {
-        latitude: this.settings.fakeLocation.lat,
-        longitude: this.settings.fakeLocation.lng,
-        accuracy: 10,
-        altitude: null,
-        altitudeAccuracy: null,
-        heading: null,
-        speed: 0, // Speed = 0 → vehicle stationary
-      },
-      timestamp: Date.now(),
-    };
+    // Remove resize observer
+    if (this._resizeObserver) {
+      this._resizeObserver.disconnect();
+      this._resizeObserver = null;
+    }
 
-    // Save originals
-    this._originalGetCurrentPosition = navigator.geolocation.getCurrentPosition.bind(navigator.geolocation);
-    this._originalWatchPosition = navigator.geolocation.watchPosition.bind(navigator.geolocation);
+    // Remove canvas
+    if (this._canvas && this._canvas.parentElement) {
+      this._canvas.parentElement.removeChild(this._canvas);
+    }
+    this._canvas = null;
+    this._ctx = null;
 
-    // Override getCurrentPosition
-    navigator.geolocation.getCurrentPosition = (success, error, options) => {
-      if (this.isRunning) {
-        fakePosition.timestamp = Date.now();
-        success(fakePosition);
-      } else if (this._originalGetCurrentPosition) {
-        this._originalGetCurrentPosition(success, error, options);
+    // Restore video visibility
+    if (this._videoEl) {
+      this._videoEl.style.opacity = '';
+      this._videoEl.style.position = '';
+      this._videoEl.style.pointerEvents = '';
+      this._videoEl = null;
+    }
+  }
+
+  /**
+   * Sync canvas pixel dimensions to its CSS display size.
+   */
+  _syncCanvasSize() {
+    if (!this._canvas) return;
+    const rect = this._canvas.getBoundingClientRect();
+    const dpr = Math.min(window.devicePixelRatio || 1, 2); // Cap at 2x for perf
+    const w = Math.round(rect.width * dpr);
+    const h = Math.round(rect.height * dpr);
+    if (this._canvas.width !== w || this._canvas.height !== h) {
+      this._canvas.width = w;
+      this._canvas.height = h;
+    }
+  }
+
+  /**
+   * Core render loop — draws video frames to canvas.
+   */
+  _startRenderLoop() {
+    const draw = () => {
+      if (!this.isRunning || !this._canvas || !this._videoEl) return;
+
+      const video = this._videoEl;
+      const ctx = this._ctx;
+      const canvas = this._canvas;
+
+      // Only draw if video has data
+      if (video.readyState >= 2) {
+        try {
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        } catch (e) {
+          // Silently ignore cross-origin or other draw errors
+        }
       }
+
+      this._rafId = requestAnimationFrame(draw);
     };
 
-    // Override watchPosition
-    navigator.geolocation.watchPosition = (success, error, options) => {
-      if (this.isRunning) {
-        const id = setInterval(() => {
-          fakePosition.timestamp = Date.now();
-          success(fakePosition);
-        }, 1000);
-        return id;
-      } else if (this._originalWatchPosition) {
-        return this._originalWatchPosition(success, error, options);
-      }
-    };
-
-    this._log('Geolocation hijack edildi (sabit konum, hız=0)', 'success');
+    this._rafId = requestAnimationFrame(draw);
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // NETWORK CONNECTION SPOOFING
-  // ═══════════════════════════════════════════════════════════════
-
-  _hijackNetworkConnection() {
-    const fakeConnection = {
-      effectiveType: '4g',
-      downlink: 10,
-      rtt: 50,
-      saveData: false,
-      type: 'wifi',
-    };
-
-    try {
-      Object.defineProperty(window.navigator, 'connection', {
-        get: () => fakeConnection,
-        configurable: true,
-      });
-    } catch (e) { /* property may not be configurable */ }
-
-    try {
-      Object.defineProperty(window.navigator, 'onLine', {
-        get: () => true,
-        configurable: true,
-      });
-    } catch (e) { /* property may not be configurable */ }
-
-    this._log('Network bağlantı bilgisi 4G/WiFi olarak sabitlendi', 'success');
-  }
-
-  // ═══════════════════════════════════════════════════════════════
-  // VIDEO PAUSE OVERRIDE & AUTO-RESUME
-  // ═══════════════════════════════════════════════════════════════
+  // ─── PAUSE OVERRIDE ─────────────────────────────────────────
 
   _overrideVideoPause() {
+    if (this._originalPause) return; // Already overridden
     this._originalPause = HTMLVideoElement.prototype.pause;
     const self = this;
 
-    HTMLVideoElement.prototype.pause = function() {
-      // If bypass is running and preventPause is enabled, ignore external pause calls
+    HTMLVideoElement.prototype.pause = function () {
       if (self.isRunning && self.settings.preventPause) {
-        // Check if this is a user-initiated pause from our own player controls
+        // Allow user-initiated pause from our UI
         if (this._userPauseAllowed) {
           this._userPauseAllowed = false;
           return self._originalPause.call(this);
         }
 
-        self._log('Pause komutu engellendi, video oynatılmaya devam ediyor', 'warning');
-
-        // Re-trigger play after a short delay
+        // Block external pause, force play
+        console.log('[TeslaBypass] Pause blocked, resuming...');
         setTimeout(() => {
           this.play().catch(() => {});
         }, 50);
@@ -340,29 +275,51 @@ class TeslaBypassModule {
 
       return self._originalPause.call(this);
     };
-
-    this._log('Video pause override aktif', 'success');
   }
 
-  /**
-   * Track a video element for auto-resume
-   */
+  // ─── VISIBILITY GUARD ───────────────────────────────────────
+
+  _installVisibilityGuard() {
+    // Prevent document.hidden from returning true
+    try {
+      Object.defineProperty(document, 'hidden', {
+        get: () => this.isRunning ? false : false,
+        configurable: true,
+      });
+    } catch (e) { /* may not be configurable */ }
+
+    try {
+      Object.defineProperty(document, 'visibilityState', {
+        get: () => this.isRunning ? 'visible' : 'visible',
+        configurable: true,
+      });
+    } catch (e) { /* may not be configurable */ }
+
+    // Suppress visibilitychange events
+    document.addEventListener('visibilitychange', (e) => {
+      if (this.isRunning) {
+        e.stopImmediatePropagation();
+        // Force-resume any paused videos
+        if (this._videoEl && this._videoEl.paused && !this._videoEl._userPauseAllowed) {
+          this._videoEl.play().catch(() => {});
+        }
+      }
+    }, true);
+  }
+
+  // ─── AUTO-RESUME MONITORING ─────────────────────────────────
+
   _trackVideo(video) {
     if (this.trackedVideos.has(video)) return;
     this.trackedVideos.add(video);
 
     const pauseHandler = () => {
       if (!this.isRunning || !this.settings.autoResume) return;
-
-      // Don't auto-resume if user explicitly paused via our UI
       if (video._userPauseAllowed) return;
 
-      this._log('Video duraklatıldı, otomatik devam ettiriliyor...', 'warning');
       setTimeout(() => {
         if (this.isRunning && video.paused) {
-          video.play().catch(err => {
-            this._log(`Otomatik play başarısız: ${err.message}`, 'error');
-          });
+          video.play().catch(() => {});
         }
       }, 200);
     };
@@ -371,42 +328,35 @@ class TeslaBypassModule {
     this._pauseListeners.set(video, pauseHandler);
   }
 
-  /**
-   * Start monitoring all video elements
-   */
   _startVideoMonitoring() {
-    // Track existing videos
     document.querySelectorAll('video').forEach(v => this._trackVideo(v));
 
-    // Periodically check video states
     this.monitorInterval = setInterval(() => {
       if (!this.isRunning) return;
-
       this.trackedVideos.forEach(video => {
         if (video.paused && this.settings.autoResume && !video._userPauseAllowed) {
           video.play().catch(() => {});
         }
       });
-
-      this._updateVideoStatusUI();
     }, 2000);
   }
 
-  /**
-   * Observe DOM for newly added video elements
-   */
   _observeNewVideos() {
     this.videoObserver = new MutationObserver((mutations) => {
       mutations.forEach(mutation => {
         mutation.addedNodes.forEach(node => {
           if (node.nodeName === 'VIDEO') {
             this._trackVideo(node);
-            this._log('Yeni video elementi tespit edildi ve izlemeye alındı', 'success');
+            if (this.isRunning && !this._canvas) {
+              this.attachCanvas(node);
+            }
           }
-          // Also check child nodes
           if (node.querySelectorAll) {
             node.querySelectorAll('video').forEach(v => {
               this._trackVideo(v);
+              if (this.isRunning && !this._canvas) {
+                this.attachCanvas(v);
+              }
             });
           }
         });
@@ -417,116 +367,39 @@ class TeslaBypassModule {
       childList: true,
       subtree: true,
     });
-
-    this._log('Video MutationObserver başlatıldı', 'success');
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // UI UPDATES
-  // ═══════════════════════════════════════════════════════════════
+  // ─── UI ─────────────────────────────────────────────────────
 
   _updateStatusUI() {
     const indicator = document.getElementById('bypass-status-indicator');
     if (indicator) {
-      if (this.isRunning) {
-        indicator.classList.add('active');
-        indicator.title = 'Bypass Aktif';
-      } else {
-        indicator.classList.remove('active');
-        indicator.title = 'Bypass Devre Dışı';
-      }
+      indicator.classList.toggle('active', this.isRunning);
+      indicator.title = this.isRunning ? 'Bypass Aktif' : 'Bypass Devre Dışı';
     }
 
-    // Update settings panel status text
     const statusText = document.getElementById('bypass-status-text');
     if (statusText) {
       statusText.textContent = this.isRunning ? '🟢 Aktif' : '🔴 Devre Dışı';
     }
-
-    // Update speed/gear indicators
-    const speedEl = document.getElementById('bypass-mocked-speed');
-    if (speedEl) {
-      speedEl.textContent = this.isRunning && this.settings.mockSpeed ? '0 km/h' : '--';
-    }
-    const gearEl = document.getElementById('bypass-mocked-gear');
-    if (gearEl) {
-      gearEl.textContent = this.isRunning && this.settings.mockGear ? 'PARK' : '--';
-    }
   }
 
-  _updateVideoStatusUI() {
-    const videoStateEl = document.getElementById('bypass-video-state');
-    if (!videoStateEl) return;
-
-    let playingCount = 0;
-    this.trackedVideos.forEach(v => {
-      if (!v.paused) playingCount++;
-    });
-
-    if (playingCount > 0) {
-      videoStateEl.textContent = `▶ ${playingCount} video oynatılıyor`;
-      videoStateEl.style.color = '#00ff88';
-    } else if (this.trackedVideos.size > 0) {
-      videoStateEl.textContent = '⏸ Durdurulmuş';
-      videoStateEl.style.color = '#ff4757';
-    } else {
-      videoStateEl.textContent = 'Video yok';
-      videoStateEl.style.color = '#8b8b8b';
-    }
+  getStatus() {
+    return {
+      running: this.isRunning,
+      canvasActive: !!this._canvas,
+      trackedVideos: this.trackedVideos.size,
+      autoResume: this.settings.autoResume,
+      preventPause: this.settings.preventPause,
+    };
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // SETTINGS MANAGEMENT
-  // ═══════════════════════════════════════════════════════════════
-
-  /**
-   * Update a bypass setting
-   */
   updateSetting(key, value) {
     this.settings[key] = value;
     this.saveSettings();
-
-    // If bypass is running, apply changes immediately
     if (this.isRunning) {
       this.stop();
       this.start();
-    }
-  }
-
-  // ═══════════════════════════════════════════════════════════════
-  // LOGGING
-  // ═══════════════════════════════════════════════════════════════
-
-  _log(message, type = 'info') {
-    const prefix = '[TeslaBypass]';
-    switch (type) {
-      case 'success':
-        console.log(`%c${prefix} ${message}`, 'color: #00ff88');
-        break;
-      case 'warning':
-        console.warn(`${prefix} ${message}`);
-        break;
-      case 'error':
-        console.error(`${prefix} ${message}`);
-        break;
-      default:
-        console.log(`${prefix} ${message}`);
-    }
-
-    // Also write to bypass log panel if it exists
-    const logPanel = document.getElementById('bypass-log');
-    if (logPanel) {
-      const entry = document.createElement('div');
-      entry.className = `bypass-log-entry ${type}`;
-      const time = new Date().toLocaleTimeString('tr-TR');
-      entry.textContent = `[${time}] ${message}`;
-      logPanel.appendChild(entry);
-      logPanel.scrollTop = logPanel.scrollHeight;
-
-      // Keep max 50 entries
-      while (logPanel.children.length > 50) {
-        logPanel.removeChild(logPanel.firstChild);
-      }
     }
   }
 }

@@ -9,7 +9,9 @@
   <link rel="stylesheet" href="styles/main.css" />
   <link rel="stylesheet" href="styles/player.css" />
   <link rel="stylesheet" href="styles/responsive.css" />
-  <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
+  <!-- EBML/MKV Parser for client-side subtitle extraction -->
+  <script src="https://cdn.jsdelivr.net/npm/ts-ebml@3.0.2/dist/EBML.min.js"></script>
 </head>
 <body>
 
@@ -216,7 +218,7 @@
 
               <!-- Subtitle selector -->
               <div class="subtitle-wrapper">
-                <button id="subtitle-btn" class="control-btn sub-btn" style="display:flex !important;">
+                <button id="subtitle-btn" class="control-btn sub-btn" title="Altyazı (C)" style="display:none;">
                   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <rect x="2" y="4" width="20" height="16" rx="2"/>
                     <path d="M7 15h4m4 0h2M7 11h2m4 0h6"/>
@@ -422,22 +424,7 @@
 
 </div><!-- #app -->
 
-<script src="js/config.js?v=1787491083.87292"></script>
-<script src="js/services/storage-service.js?v=1787491083.87292"></script>
-<script src="js/services/api-service.js?v=1787491083.87292"></script>
-<script src="js/services/cache-service.js?v=1787491083.87292"></script>
-<script src="js/modules/ui-module.js?v=1787491083.87292"></script>
-<script src="js/modules/auth-module.js?v=1787491083.87292"></script>
-<script src="js/modules/player-module.js?v=1787491083.87292"></script>
-<script src="js/modules/content-module.js?v=e8d275d6"></script>
-<script src="js/feature-overrides.js?v=20260407"></script>
-<script src="js/modules/epg-module.js?v=1787491083.87292"></script>
-<script src="js/modules/settings-module.js?v=1787491083.87292"></script>
-<script src="js/modules/tesla-bypass-module.js?v=1787491083.87292"></script>
-<script src="js/app.js?v=1787491083.87292"></script>
-<script src="js/startup-helper.js?v=1787491083.87292"></script>
-
-  <!-- ═══ ACTOR DETAILS MODAL ══════════════════════════════════ -->
+<!-- ═══ ACTOR DETAILS MODAL ══════════════════════════════════ -->
   <div id="actor-modal" class="modal" style="display:none; z-index: 9999;">
     <div class="modal-content" style="max-width: 900px;">
       <div class="modal-header">
@@ -457,9 +444,26 @@
       </div>
     </div>
   </div>
+  <!-- Core Application Scripts -->
+  <!-- Feature Overrides for Legacy / Edge Cases -->
+  <!-- Startup -->
+    <!-- Core Application Scripts -->
+  <script src="js/config.js?v=1787622665"></script>
+  <script src="js/services/storage-service.js?v=1787622665"></script>
+  <script src="js/services/api-service.js?v=1787622665"></script>
+  <script src="js/services/cache-service.js?v=1787622665"></script>
+  <script src="js/modules/ui-module.js?v=1787622665"></script>
+  <script src="js/modules/auth-module.js?v=1787622665"></script>
+  <script src="js/modules/content-module.js?v=1787622665"></script>
+  <script src="js/modules/epg-module.js?v=1787622665"></script>
+  <script src="js/modules/settings-module.js?v=1787622665"></script>
+  <script src="js/modules/mkv-demuxer.js?v=1787622665"></script>
+  <script src="js/modules/player-module.js?v=1787622665"></script>
+  <script src="js/modules/tesla-bypass-module.js?v=1787622665"></script>
+  <!-- Feature Overrides for Legacy / Edge Cases -->
+  <script src="js/feature-overrides.js?v=1787622665"></script>
+  <!-- Startup -->
+  <script src="js/app.js?v=1787622665"></script>
+  <script src="js/startup-helper.js?v=1787622665"></script>
 </body>
 </html>
-
-
-
-
